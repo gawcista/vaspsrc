@@ -18,22 +18,23 @@ def distance(a,b):
 
 # initialize constants and global variables
 def initialize():
-	global Kpoints,Special,Kpath,Energy
+	global Kpoints,Special,Kpath,Energy,Breakpoints
 	# initialization for list, don't make change here 
 	Special = []
 	Kpoints = []
 	Energy = [[],[]]
 	Kpath = []
+	Breakpoints = []
 	# Global constants you can make change here
 	global DIR,Xtics
 	DIR = 'band/' #where your OUTCAR file locates
-	Xtics = ['{/Symbol G}','M','K','{/Symbol G}'] # the high-symmetry point tics
+	Xtics = ['{/Symbol G}','L','B_1','B','Z','{/Symbol G}','X','Q','F','P_1','Z','L','P'] # the high-symmetry point tics
 
 
 # read data from OUTCAR
 def read_OUTCAR():
 	global DIR,NKPTS,NBANDS,E_fermi,ISPIN
-	global Kpints,Special,Kpath,Energy
+	global Kpints,Special,Kpath,Energy,Breakpoints
 	# read constant parameters
 	NKPTS = int(getoutput("grep NKPTS %sOUTCAR"%DIR).split()[3])
 	NBANDS = int(getoutput("grep NBANDS %sOUTCAR"%DIR).split()[-1])
@@ -49,18 +50,28 @@ def read_OUTCAR():
 			dr = distance(Kpoints[i],Kpoints[i-1])
 			if i > 2 and dr > 5*(Kpath[-1]-Kpath[-2]) and Kpath[-1]-Kpath[-2] != 0:
 				dr = 0
+				Breakpoints.append(route)
+				Xtics[len(Special)] = Xtics[len(Special)]+'|'+Xtics[len(Special)+1]
+				del Xtics[len(Special)+1]
 			route += dr
 			if dr == 0:
 				Special.append(route)
 		Kpath.append(route)
 	Special.append(route)
 	# read eigenvalues
+	global VBM,CBM
+	VBM = [-100,0,0]
+	CBM = [100.0,0]
 	for k in range(1,NKPTS+1):
 		klines = getoutput("grep 'k-point%6d' %sOUTCAR -A %d|egrep -v 'k-point|band'|awk '{print $2}'"%(k,DIR,NBANDS+1)).split()
 		Ek = [[],[]] # eigenvalues for kth k-point
 		for band in range(NBANDS):
 			for spin in range(ISPIN):
 				Ek[spin].append(float(klines[band+NBANDS*spin])-E_fermi)
+				if Ek[spin][-1]>E_fermi and Ek[spin][-1]<CBM[0]:
+					CBM = [Ek[spin][-1],band,k]
+				if Ek[spin][-1]<E_fermi and Ek[spin][-1]>VBM[0]:
+					VBM = [Ek[spin][-1],band,k]
 		for spin in range(ISPIN):
 			Energy[spin].append(Ek[spin])
 
@@ -72,6 +83,8 @@ def write_plot(type=1,head='',dir=''):
 				for band in range(NBANDS):
 					for k in range(NKPTS):
 						print('%f\t%f'%(Kpath[k],Energy[spin][k][band]),file=fout)
+						if k<NKPTS-1 and Kpath[k] in Breakpoints and Kpath[k+1] in Breakpoints:
+							print(file=fout)
 					print(file=fout)
 	if type == 2:
 		for spin in range(ISPIN):
@@ -84,28 +97,34 @@ def write_plot(type=1,head='',dir=''):
 
 #write gnuplot command
 def write_gnuplot(y0,y1,color=['blue','red'],outputfilename='band'):
+	font = 'Times'
 	border_width = 4
-	arrow_width = 4
+	arrow_width = 2
 	line_width = 4
+	xtics_size = 16
+	ytics_size = 20
+	ylabel_size = 28
 	with open('plot.gnu','w') as fout:
-		#print('set term png font "times.ttf,14"')
-		print('set term post eps color enhanced "Times,20"',file=fout)
+		print('set term post eps color enhanced "%s"'%font,file=fout)
 		print('set output "%s.eps"'%outputfilename,file=fout)
 		print('unset key',file=fout)
 		print('set size 0.6,1',file=fout)
 		print('set border lw %d'%border_width,file=fout)
-		print('set ylabel "Energy (eV)"',file=fout)
+		print('set ylabel "Energy (eV)" font "%s,%d"'%(font,ylabel_size),file=fout)
 		print('set xrange [%f:%f]'%(Kpath[0],Kpath[-1]),file=fout)
 		print('set yrange [%f:%f]'%(y0,y1),file=fout)
-		print('set xtics (',end='',file=fout)
+		print('set ytics font "%s,%d"'%(font,ytics_size),file=fout)
+		print('set xtics () font "%s,%d"'%(font,xtics_size),file=fout)
 		for i in range(len(Special)):
-			if i < len(Special)-1:
-				print('"%s" %f'%(Xtics[i],Special[i]),file=fout,end=',')
-			else:
-				print('"%s" %f'%(Xtics[i],Special[i]),file=fout,end=')\n')
+			if '_' not in Xtics[i]:
+				Xtics[i]+='_'
+			print('set xtics add ("%s" %f)'%(Xtics[i],Special[i]),file=fout)
 		print('set arrow from 0,0 to %f,0 nohead lt 0 lw %d'%(Special[-1],arrow_width),file=fout)
 		for x in Special[1:-1]:
-			print('set arrow from %f,%f to %f,%f nohead lt 0 lw %d'%(x,y0,x,y1,arrow_width),file=fout)
+			if x not in Breakpoints:
+				print('set arrow from %f,%f to %f,%f nohead front lt 0 lw %d'%(x,y0,x,y1,arrow_width),file=fout)
+			else:
+				print('set arrow from %f,%f to %f,%f nohead front lt -1 lw %d'%(x,y0,x,y1,arrow_width),file=fout)
 		print('plot ',end=' ',file=fout)
 		for spin in range(ISPIN):
 			print('"%d.dat" w l lw %d lc rgb "%s"'%(spin,line_width,color[spin]),file=fout,end='')
@@ -135,3 +154,4 @@ def plot(y0,y1,color=['blue','red'],file='band'):
 
 if __name__ == '__main__':
 	plot(-2,2)
+	print(CBM[0]-VBM[0])
