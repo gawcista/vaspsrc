@@ -1,246 +1,414 @@
-import re
-import os
-import subprocess
-import math
+#
+# Band structure plot module for VASP calculations 
+# gnuplot, ImageMagick is required to process images
+# code in Python3
+#
+# Author: Gao (Gawcista) Yifan (SUSTech & HKUST)
+#
+from subprocess import getoutput
+from os import system,path,remove
+from numpy import array,linspace,cross,linalg
+from copy import deepcopy
 
-from subprocess import Popen, PIPE, call
+global NUM_SUB_PLOTS
 
-global SPACE,NK,NBAND,ISPIN,SPIN_MODE,DIR,HEAD,FERMI
-global E_fermi,Band,Energy,Occupancy,Kpoints,Special,Route
+ORBITAL=['s','py','pz','px','dxy','dyz','dz2','dxz','dx2-y2','tot']
 
-def getnum(s):
-	return re.findall(r"[-+]?[0-9]*\.?[0-9]+",s)
+class band_point:
+	energy = 0.
+	weight = 0.
+	kx = 0.
+	ky = 0.
+	kz = 0.
+	kpath = 0.
+	def __init__(self,energy=0.,weight=0.):
+		self.energy = energy
+		self.weight = weight
 
+class projected_band:
+	atom1 = 0
+	atom2 = 0
+	orbital = []
+	color = 'red'
+	outputfilename = ''
+	proj = [[],[]]
+	def __init__(self,atom1=0,atom2=0,orbital=[],color='red',outputfilename=''):
+		self.atom1 = atom1
+		self.atom2 = atom2
+		self.orbital = orbital
+		self.color = color
+		self.outputfilename = outputfilename
+		self.proj = [[],[]]
+
+	def calculate(self,ISPIN,NKPTS,NBANDS,Projection):
+		for spin in range(ISPIN):
+			for k in range(NKPTS):
+				proj_k=[]
+				for band in range(NBANDS):
+					proj_band = 0.
+					for ion in range(self.atom1-1,self.atom2):
+						for orbit in self.orbital:
+							proj_band += Projection[spin][k][band][ion][orbit]
+					proj_k.append(proj_band)
+				self.proj[spin].append(proj_k)
+
+class band_structure:
+	color = []
+	color_circle = []
+	DIR = ''
+	Special = []
+	Kpoints = []
+	Energy = [[],[]]
+	Projection = [[],[]]
+	Kpath = []
+	NKPTS = 0
+	NBANDS = 0
+	ISPIN = 0
+	NIONS = 0
+	NSPECIAL = 0
+	E_fermi = 0
+	Xtics = []
+	VBM = [-100,0,0]
+	CBM = [100,0,0]
+	plot_gap = False
+	set_plot_projection = False
+	projection_list = []
+	gap = 0
+	METAGGA = 'F'
+	LHFCALC = False
+	def __init__(self,file='band/OUTCAR',selected_bands=[],xtics=['{/Symbol G}','M','K','{/Symbol G}','A','L','H','A','L','M','H','K'],color=['black','red'],dashtype=[1,1]):
+		#initializing
+		self.color = color
+		self.dashtype = dashtype
+		self.file = file
+		self.Xtics = xtics
+		self.Special = []
+		self.Kpoints = []
+		self.Kpoints_rec = []
+		self.Energy = [[],[]]
+		self.Projection = [[],[]]
+		self.Kpath = []
+		self.NSPECIAL = 0
+		self.VBM = [0,-100,0,0]
+		self.CBM = [0,100,0,0]
+		self.gap = 0
+		self.plot_gap = False
+		self.plot_projection = False
+		self.projection_list = []
+		self.bandindex = []
+		# read constant parameters
+		self.NKPTS = 0#int(getoutput("grep NKPTS %s"%self.file).split()[3])
+		if selected_bands!=[]:
+			self.NBANDS=len(selected_bands)
+			self.bandindex=selected_bands
+		else:
+			self.NBANDS = int(getoutput("grep 'number of bands    NBANDS=' %s"%self.file).split()[-1])
+		self.NIONS = int(getoutput("grep NIONS %s"%self.file).split()[-1])
+		self.ISPIN = int(getoutput("grep ISPIN %s"%self.file).split()[2])
+		self.E_fermi = float((getoutput("grep E-fermi %s"%self.file)).split()[2])
+		self.METAGGA = str(getoutput("grep 'METAGGA=' %s"%self.file).split()[1])
+		self.LHFCALC = str(getoutput("grep 'LHFCALC =' %s"%self.file).split()[2])=='T'
+		self.flag_read = 'EIGENVAL'
+	
+	def set_E_fermi(self,E):
+		self.E_fermi = E
+
+	def set_plot_gap(self,flag):
+		self.plot_gap = flag
+
+	def load(self,OUTCAR='band/OUTCAR',PROCAR='band/PROCAR',EIGENVAL='band/EIGENVAL'): # add band in OUTCAR, along k-axis
+		NKPTS_new = int(getoutput("grep NKPTS %s"%OUTCAR).split()[3])
+		NBANDS_new = int(getoutput("grep 'number of bands    NBANDS=' %s"%OUTCAR).split()[-1])
+		if self.bandindex!=[]:
+			band_list=self.bandindex
+		else:
+			band_list=[i for i in range(0,NBANDS_new,1)]
+		NK_skip = 0
+		if self.METAGGA != 'F' or self.LHFCALC:
+			NK_skip = 1
+			while float((getoutput("grep 2pi/SCALE %s -A %d|tail -n %d|tail -1"%(OUTCAR,NK_skip,NK_skip)).split()[-1])) > 0:
+				NK_skip += 1
+			NK_skip = NK_skip-1
+		# read k-path and find high-symmetry points
+		kpoint_list = getoutput("grep '2pi/SCALE' %s -A %d|tail -n %d"%(OUTCAR,NKPTS_new,NKPTS_new-NK_skip)).split()
+		kpoint_list_rec = getoutput("grep 'k-points in reciprocal lattice and weights' %s -A %d|tail -n %d"%(OUTCAR,NKPTS_new,NKPTS_new-NK_skip)).split()
+		if len(self.Special)==0:
+			route = 0
+			self.Special.append([route,0,self.NSPECIAL])
+		else:
+			route = self.Kpath[-1]
+		flag_special = False
+		for i in range(NKPTS_new-NK_skip):
+			self.Kpoints.append([float(kpoint_list[4*i]),float(kpoint_list[4*i+1]),float(kpoint_list[4*i+2])])
+			self.Kpoints_rec.append([float(kpoint_list_rec[4*i]),float(kpoint_list_rec[4*i+1]),float(kpoint_list_rec[4*i+2])])
+			if len(self.Kpoints) > 1:
+				dr = distance(self.Kpoints[-1],self.Kpoints[-2])
+				if len(self.Kpath)>1 and not is_parallel(array(self.Kpoints[-1])-array(self.Kpoints[-2]),array(self.Kpoints[-2])-array(self.Kpoints[-3])):
+					dr = 0
+				if flag_special:
+					flag_special = False
+					if distance(self.Kpoints[-2],self.Kpoints[-3])>1e-8:
+						self.NSPECIAL +=1
+						self.Special.append([route,i+self.NKPTS-1,self.NSPECIAL])
+					elif not is_parallel(array(self.Kpoints[-1])-array(self.Kpoints[-2]),array(self.Kpoints[-3])-array(self.Kpoints[-4])):
+						self.Special.append([route,i+self.NKPTS-1,self.NSPECIAL])
+					else:
+						self.NSPECIAL -=1
+						del(self.Special[-1])
+				if dr == 0:
+					flag_special = True
+				route += dr
+			self.Kpath.append(route)
+		if route != self.Special[-1][0] :
+			self.NSPECIAL += 1
+		self.Special.append([route,i+self.NKPTS,self.NSPECIAL])
+
+		if self.flag_read=='OUTCAR':# read eigenvalues from OUTCAR
+			for spin in range(self.ISPIN):
+				for k in range(1+NK_skip,NKPTS_new+1):
+					klines = getoutput("grep 'k-point%6d' %s -A %d|egrep -v 'k-point|band'|awk '{print $2}'"%(k,OUTCAR,NBANDS_new+1)).split()
+					band_k = [[],[]] # eigenvalues for kth k-point
+					for band in band_list:
+						bandpoint=band_point(energy=float(klines[band+NBANDS_new*spin])-self.E_fermi)
+						band_k[spin].append(bandpoint)
+						if bandpoint.energy>0 and bandpoint.energy<self.CBM[1]:
+							self.CBM = [self.Kpath[k+self.NKPTS-1],bandpoint.energy,k+self.NKPTS-1,band]
+						if bandpoint.energy<0 and bandpoint.energy>self.VBM[1]:
+							self.VBM = [self.Kpath[k+self.NKPTS-1],bandpoint.energy,k+self.NKPTS-1,band]
+					self.Energy[spin].append(band_k[spin])
+
+		elif self.flag_read=='EIGENVAL':# read eigenvalues from EIGENVAL
+			for spin in range(self.ISPIN):
+				temp_k = []
+				for band in band_list:
+					bandlines = getoutput("grep '%5d      ' %s|awk '{print $%d}'"%(band+1,EIGENVAL,spin+2)).split()
+					for k in range(1+NK_skip,NKPTS_new+1):
+						bandpoint=band_point(energy=float(bandlines[k-NK_skip-1])-self.E_fermi)
+						if k-NK_skip>len(temp_k):
+							temp_k.append([bandpoint])
+						else:
+							temp_k[k-NK_skip-1].append(bandpoint)
+						if bandpoint.energy>0 and bandpoint.energy<self.CBM[1]:
+							self.CBM = [self.Kpath[k+self.NKPTS-1],bandpoint.energy,k+self.NKPTS-1,band]
+						if bandpoint.energy<0 and bandpoint.energy>self.VBM[1]:
+							self.VBM = [self.Kpath[k+self.NKPTS-1],bandpoint.energy,k+self.NKPTS-1,band]
+				for k_list in temp_k:
+					self.Energy[spin].append(k_list)
+
+		# read projections from PROCAR
+		if self.plot_projection:
+			with open(PROCAR,'r') as fin:
+				lines = fin.readlines()
+			band_lines = self.NIONS + 5
+			k_lines = band_lines*self.NBANDS + 3
+			spin_lines = k_lines*NKPTS_new + 1
+			for spin in range(self.ISPIN):
+				for k in range(NK_skip,NKPTS_new):
+					line_kpoints = k_lines*k+ 3 + spin_lines*spin
+					energy_kpoints = []
+					projection_kpoint = []
+					for band in band_list:
+						line_bands = line_kpoints+band_lines*band+2
+						energy = float(lines[line_bands].split()[4])-self.E_fermi
+						energy_kpoints.append(energy)
+						projection_band = []
+						tot_i = float(lines[line_bands+2+self.NIONS+1].split()[-1])
+						for ion in range(self.NIONS+1):
+							line_ion = line_bands+ion+3
+							s = float(lines[line_ion].split()[-10])/tot_i
+							py = float(lines[line_ion].split()[-9])/tot_i
+							pz = float(lines[line_ion].split()[-8])/tot_i
+							px = float(lines[line_ion].split()[-7])/tot_i
+							dxy = float(lines[line_ion].split()[-6])/tot_i
+							dyz = float(lines[line_ion].split()[-5])/tot_i
+							dz2 = float(lines[line_ion].split()[-4])/tot_i
+							dxz = float(lines[line_ion].split()[-3])/tot_i
+							dx2 = float(lines[line_ion].split()[-2])/tot_i
+							tot = float(lines[line_ion].split()[-1])/tot_i
+							projection_band.append([s,py,pz,px,dxy,dyz,dz2,dxz,dx2,tot])
+							#correction
+							#for orbital in range(len(projection_band[-1])):
+								#if projection_band[-1][orbital]<0.6:
+								#	projection_band[-1][orbital] = 0
+						projection_kpoint.append(projection_band)
+					self.Projection[spin].append(projection_kpoint)
+		
+		self.gap = self.CBM[0]-self.VBM[0]
+		self.NKPTS += NKPTS_new-NK_skip
+	def rearrange(self,newlist):
+		Special_new = []
+		Kpoints_new = []
+		Kpoints_rec_new = []
+		Energy_new = [[],[]]
+		Projection_new = [[],[]]
+		Kpath_new = []
+		VBM_new = [0,-100,0,0]
+		CBM_new = [0,100,0,0]
+		route_new = 0
+		k_new = 0
+		#print(self.Special)
+		for i in range(len(newlist)):
+			j = abs(newlist[i])
+			if newlist[i]>0:
+				Special_new.append(deepcopy(self.Special)[(j-1)*2])
+				Special_new.append(deepcopy(self.Special)[(j-1)*2+1])
+				Kpoints_new += self.Kpoints[Special_new[-2][1]:Special_new[-1][1]+1]
+				Kpoints_rec_new += self.Kpoints_rec[Special_new[-2][1]:Special_new[-1][1]+1]
+				Kpath_temp = self.Kpath[Special_new[-2][1]:Special_new[-1][1]+1]
+				for spin in range(self.ISPIN):
+					Energy_new[spin] += self.Energy[spin][Special_new[-2][1]:Special_new[-1][1]+1]
+					Projection_new[spin] += self.Projection[spin][Special_new[-2][1]:Special_new[-1][1]+1]
+			else:	
+				Special_new.append(deepcopy(self.Special)[(j-1)*2+1])
+				Special_new.append(deepcopy(self.Special)[(j-1)*2])
+				Kpoints_new += list(reversed(self.Kpoints[Special_new[-1][1]:Special_new[-2][1]+1]))
+				Kpoints_rec_new += list(reversed(self.Kpoints_rec[Special_new[-1][1]:Special_new[-2][1]+1]))
+				Kpath_temp = self.Kpath[Special_new[-1][1]:Special_new[-2][1]+1]
+				for spin in range(self.ISPIN):
+					Energy_new[spin] += list(reversed(self.Energy[spin][Special_new[-1][1]:Special_new[-2][1]+1]))
+					Projection_new[spin] += list(reversed(self.Projection[spin][Special_new[-1][1]:Special_new[-2][1]+1]))
+			#print(abs(self.Special[(j-1)*2][0]-self.Special[(j-1)*2+1][0]))
+			Special_new[-2][0] = route_new
+			Special_new[-2][1] = k_new
+			for i in range(len(Kpath_temp)):
+				if i==0:
+					Kpath_new.append(route_new)
+				else:
+					Kpath_new.append(Kpath_new[-1]+abs(Kpath_temp[i]-Kpath_temp[i-1]))
+			route_new += abs(self.Special[(j-1)*2][0]-self.Special[(j-1)*2+1][0])
+			k_new += abs(self.Special[(j-1)*2][1]-self.Special[(j-1)*2+1][1])
+			Special_new[-1][0] = route_new
+			Special_new[-1][1] = k_new
+			k_new += 1
+
+		self.Special = Special_new
+		self.Kpoints = Kpoints_new
+		self.Kpoints_rec = Kpoints_rec_new
+		self.Energy = Energy_new
+		self.Projection = Projection_new
+		self.Kpath = Kpath_new
+		#print(Special_new)
+	
+	def exchange(self,ibanda,ibandb,ik,ispin=0):
+		self.Energy[ispin][ik][ibanda],self.Energy[ispin][ik][ibandb]=self.Energy[ispin][ik][ibandb],self.Energy[ispin][ik][ibanda]
+		if self.plot_projection:
+			self.Projection[ispin][ik][ibanda],self.Projection[ispin][ik][ibandb]=self.Projection[ispin][ik][ibandb],self.Projection[ispin][ik][ibanda]
+
+
+	def read_bandplot(self,OUTCAR='OUTCAR',PROCAR='PROCAR',EIGENVAL='EIGENVAL'):
+		self.load(OUTCAR=OUTCAR,PROCAR=PROCAR,EIGENVAL=EIGENVAL)
+
+
+
+# calculate distance between two sites
 def distance(a,b):
 	dis = .0
 	for i in range(3):
 		dis += (a[i]-b[i])**2
-	return math.sqrt(dis)
+	return dis**0.5
 
-def initialize(): # initialize constants and global variables
-	global SPACE,NK,NBAND,ISPIN,SPIN_MODE,DIR,HEAD,FERMI
-	global E_fermi,Band,Energy,Occupancy,Kpoints,Special,Route
-	NK = 0
-	NBAND = 120
-	SPIN_MODE = 0
-	DIR = ''
-	HEAD = 8
-	FERMI = '0'
-	SPACE = ' '
-	ISPIN = 1
-	E_fermi = 0.
-	Band = []
-	Energy = []
-	Occupancy = []
-	Kpoints = []
-	Special = []
-	Route = ['{/Symbol G}','M','K','{/Symbol G}']
+def is_parallel(a,b,error=1e-8):
+	tmp = linalg.norm(cross(a,b))
+	if tmp<error:
+		return True
+	else:
+		return False
 
-def set_DIR():
-	mode = ''
-	global DIR
-	while(mode!='1' and mode!='2'):
-		mode = input("Please choose mode(1:filename;2:path)\n")
-		if (mode=='1'):
-			print('Filename mode chosen!') # developing
-		if (mode=='2'):
-			print('Path mode chosen!')
-			global DIR
-			DIR = input("Input the calculation directory:\n")
-			if (len(DIR)!=0 and DIR[len(DIR)-1]!='/'):
-				DIR += '/'
-		if (mode!='1' and mode!='2'):
-			print('Error input!')
+def write_plot(bands=[],head='',dir=''):
+	filenum = 0
+	for bandstruct in bands:
+		#print(bandstruct.NBANDS,bandstruct.NKPTS,bandstruct.ISPIN)
+		for spin in range(bandstruct.ISPIN):
+			filenum += 1
+			with open('%s%d.dat'%(head,filenum),'w') as fout:
+				for band in range(bandstruct.NBANDS):
+					cc=0
+					for k in range(bandstruct.NKPTS):
+						print('%f\t%f'%(bandstruct.Kpath[k],bandstruct.Energy[spin][k][band].energy+cc),file=fout,end=' ')
+						if bandstruct.plot_projection:
+							for proj in bandstruct.projection_list:
+								print('\t%f'%proj.proj[spin][k][band],end=' ',file=fout)
+						print(file=fout)
+						if (k>0 and k in array(bandstruct.Special).T[1] and k+1 in array(bandstruct.Special).T[1]) or k+1 == bandstruct.NKPTS:
+							print(file=fout)
+						#if k<bandstruct.NKPTS-1 and bandstruct.Kpath[k] in bandstruct.Breakpoints and bandstruct.Kpath[k+1] in bandstruct.Breakpoints:
+						#	print(file=fout)
+					#print(file=fout)
+	global NUM_SUB_PLOTS
+	NUM_SUB_PLOTS = filenum
 
-def set_SPIN():
-	global SPIN_MODE
-	while(mode!='1' and mode!='2'):
-		mode = input("Please choose output spin mode(1:Up; 2:Down)\n")
-		if (mode=='1'):
-			print('Filename mode chosen!')
-		if (mode=='2'):
-			print('Path mode chosen!')
-		if (mode!='1' and mode!='2'):
-			print('Error input!')
-	SPIN_MODE = int(mode)-1
+def print_plot(bands=[]):
+	filenum = 0
+	for bandstruct in bands:
+		for spin in range(bandstruct.ISPIN):
+			filenum += 1
+			for k in range(bandstruct.NKPTS):
+				print("%f\t%f\t%f\t%f"%(bandstruct.Kpoints_rec[k][0],bandstruct.Kpoints_rec[k][1],bandstruct.Kpoints_rec[k][2],bandstruct.Kpath[k]),end='\t')
+				for band in range(bandstruct.NBANDS):
+					print(bandstruct.Energy[spin][k][band].energy,end="\t")
+				print()
 
-def correction():
-	global FERMI,DIR,E_fermi
-	band=float(getnum(subprocess.getoutput('grep E-fermi '+DIR+'band/OUTCAR'))[0])
-	if FERMI == '0':
-		E_fermi = 0.
-		return -band
-	else: 
-		E_fermi = band
-		scf=float(getnum(subprocess.getoutput('grep E-fermi '+DIR+'SCF/OUTCAR'))[0])
-		return scf-band
+def write_gnuplot(y0,y1,band_list=[],filename='',outputfilename=''):
+	font = 'Times'
+	x0 = band_list[0].Special[0][0]
+	x1 = band_list[0].Special[-1][0]
+	border_width = 4
+	arrow_width = 2
+	line_width = 16
+	xtics_size = 22
+	ytics_size = 22
+	ylabel_size = 24
+	with open('%s.gnu'%filename,'w') as fout:
+		print('set term post eps dl 0.4 color enhanced "%s"'%font,file=fout)
+		print('set output "%s.eps"'%outputfilename,file=fout)
+		print('unset key',file=fout)
+		print('set size ratio 0.8',file=fout)
+		print('set border lw %d'%border_width,file=fout)
+		print('set ylabel "Energy (eV)" font "%s,%d"'%(font,ylabel_size),file=fout)
+		print('emin=%f'%y0,file=fout)
+		print('emax=%f'%y1,file=fout)
+		print('set xrange [%f:%f]'%(x0,x1),file=fout)
+		print('set yrange [emin:emax]',file=fout)
+		print('set ytics font "%s,%d"'%(font,ytics_size),file=fout)
+		print('set xtics () font "%s,%d"'%(font,xtics_size),file=fout)
+		print(band_list[0].Special)
+		for bandstruct in band_list:
+			if bandstruct.plot_gap:
+				print('set object 1 circle center %f,%f size 0.0004 lc 1 fs transparent solid 0.8 noborder fc "red"'%(bandstruct.VBM[0],bandstruct.VBM[1]),file=fout)
+				print('set object 2 circle center %f,%f size 0.0004 lc 1 fs transparent solid 0.8 noborder fc "blue"'%(bandstruct.CBM[0],bandstruct.CBM[1]),file=fout)		
+		
+		for i in range(len(band_list[0].Special)):
+			if i==0 or i==len(band_list[0].Special)-1:
+				print('set xtics add ("%s" %f)'%(band_list[0].Xtics[band_list[0].Special[i][-1]],band_list[0].Special[i][0]),file=fout)
+			elif band_list[0].Special[i][0] == band_list[0].Special[i-1][0]:
+				if band_list[0].Xtics[band_list[0].Special[i][2]] == band_list[0].Xtics[band_list[0].Special[i-1][2]]:
+					print('set xtics add ("%s" %f)'%(band_list[0].Xtics[band_list[0].Special[i][-1]],band_list[0].Special[i][0]),file=fout)
+					print('set arrow from %f,emin to %f,emax nohead front lt 0 lw %d'%(band_list[0].Special[i][0],band_list[0].Special[i][0],arrow_width),file=fout)
+				else:
+					print('set xtics add ("%s|%s" %f)'%(band_list[0].Xtics[band_list[0].Special[i-1][-1]],band_list[0].Xtics[band_list[0].Special[i][-1]],band_list[0].Special[i][0]),file=fout)	
+					print('set arrow from %f,emin to %f,emax nohead front lt -1 lw %d'%(band_list[0].Special[i][0],band_list[0].Special[i][0],arrow_width),file=fout)
 
-def read_EIGENVAL():
-	global NK,NBAND,HEAD,ISPIN,DIR,Energy,Occupancy,Kpoints,Special
-	fin = open(DIR+'band/EIGENVAL','r')
-	lines = fin.readlines()
-	fin.close()
-	NK = int(getnum(lines[5])[1])
-	NBAND = int(getnum(lines[5])[2])
-	ISPIN =int(getnum(subprocess.getoutput('grep ISPIN '+DIR+'band/OUTCAR'))[0])
-	os.system('grep -A '+str(NK)+' 2pi/SCALE '+DIR+'band/OUTCAR >'+DIR+'kpoints.temp')
-	fin = open(DIR+'kpoints.temp','r')
-	klines = fin.readlines()
-	fin.close()
-	os.system('rm '+DIR+'kpoints.temp')
-	del klines[0]
-	dE = correction()
-	route = 0.
-	Special.append(0.)
-	print(NK)
-	for i in range(NK):
-		Et = [[],[]]
-		Ot = [[],[]]
-		for j in range(NBAND):
-			ls = i*(NBAND+2)+HEAD
-			for spin in range(ISPIN):			
-				Et[spin].append(float(getnum(lines[ls+j])[spin+1])+dE)
-				#Ot[spin].append(float(getnum(lines[ls+j])[spin+3]))
-		Energy.append(Et)
-		Occupancy.append(Ot)
+		filenum = 0
+		print('plot ',end=' ',file=fout)
+		for bandstruct in band_list:
+			for spin in range(bandstruct.ISPIN):
+				filenum += 1
+				for p in range(len(bandstruct.projection_list)):
+					print('"%s%d.dat" u 1:2:(0.001*sqrt($%d)) w circles lc rgb "%s" fs transparent solid 0.8 noborder,\\'%(filename,filenum,p+3,bandstruct.projection_list[p].color),file=fout)
+			#	print(filenum,bandstruct.dashtype[spin],line_width,bandstruct.color[spin])
+				print('"%s%d.dat" u 1:2 w l dt %d  lw %d lc rgb "%s"'%(filename,filenum,bandstruct.dashtype[spin],line_width,bandstruct.color[spin]),file=fout,end='')
+				if filenum < NUM_SUB_PLOTS:
+						print(',\\',file=fout)
 
-		point = getnum(klines[i])
-		ktemp = [0,1,2]
-		for j in ktemp:
-			ktemp[j] = float(point[j])
-		if i>0:
-			route += distance(ktemp,Kpoints[i-1])
-			ktemp.append(route)
-			if distance(ktemp,Kpoints[i-1]) == 0:
-				Special.append(route)
-		else:
-			ktemp.append(0)
-		Kpoints.append(ktemp)
-	Special.append(Kpoints[NK-1][3])
+# convert eps to png
+def eps_to_png(name):
+	system("convert -density 600 %s.eps %s.png"%(name,name))
 
-def print_SPIN(OUTPUT_SPIN=0):
-	global NK,NBAND,Energy,Occupancy,Kpoints
-	for i in range(NK):
-		print(Kpoints[i][3],end=' ')
-		for j in range(NBAND):
-			print(Energy[i][OUTPUT_SPIN][j],end=' ')
-		print()
-
-def print2File(OUTPUT_SPIN,filename,dir=''):
-	global NK,NBAND,Energy,SPACE,Occupancy,Kpoints
-	fout = open(dir+filename,'w')
-	for i in range(NK):
-		fout.write(str(Kpoints[i][3])+SPACE)
-		for j in range(NBAND):
-			fout.write(str(Energy[i][OUTPUT_SPIN][j])+SPACE)
-		fout.write('\n')
-	fout.close()
-
-def writePlot(y0,y1,color,inputfilename,outputfilename='output.eps',dir='',filename='plot_test'):
-	global NK,Kpoints
-
-	fout = open(dir+filename,'w')
-	fout.write('set term post eps color enhanced "Helvetica" 20\n')
-	fout.write('set output "'+outputfilename+'"\n')
-	fout.write('unset key\n')
-	fout.write('set ylabel "Energy (eV)"\n')
-	fout.write('set xrange [0:'+str(Kpoints[NK-1][3])+']\n')
-	fout.write('set yrange ['+str(y0)+':'+str(y1)+']\n')
-
-	fout.write('set xtics (')
-	for i in range(len(Special)):
-		fout.write('"'+Route[i]+'" '+str(Special[i]))
-		if i < len(Special)-1:
-			fout.write(', ')
-		else:
-			fout.write(')\n')
-
-	for i in range(len(Special)-2):
-		fout.write('set arrow from '+str(Special[i+1])+','+str(y0)+' to '+str(Special[i+1])+','+str(y1)+' nohead lt 0 lw 2\n')
-	
-	fout.write('plot ')
-	for i in range(NBAND-1):
-		fout.write("'"+inputfilename+"'"+' u 1:'+str(i+2)+' w l lc '+str(color)+' lw 4,\\\n')
-	fout.write("'"+inputfilename+"'"+' u 1:'+str(NBAND+1)+' w l lc '+str(color)+ ' lw 4\n')
-
-	fout.close()
-
-def plotSpin(y0,y1,color1,color2,spinf1,spinf2,outputfilename='output.eps',dir='',filename='plot_test'):
-	global NK,Kpoints
-	fout = open(dir+filename,'w')
-	fout.write('set term post eps color enhanced "Helvetica" 20\n')
-	fout.write('set output "'+outputfilename+'"\n')
-	fout.write('unset key\n')
-	fout.write('set ylabel "Energy (eV)"\n')
-	fout.write('set xrange [0:'+str(Kpoints[NK-1][3])+']\n')
-	fout.write('set yrange ['+str(y0)+':'+str(y1)+']\n')
-	fout.write('set border lw 2 \n')
-
-	fout.write('set xtics (')
-	for i in range(len(Special)):
-		fout.write('"'+Route[i]+'" '+str(Special[i]))
-		if i < len(Special)-1:
-			fout.write(', ')
-		else:
-			fout.write(')\n')
-
-	for i in range(len(Special)-2):
-		fout.write('set arrow from '+str(Special[i+1])+','+str(y0)+' to '+str(Special[i+1])+','+str(y1)+' nohead lt 0 lw 4\n')
-	
-	fout.write('set arrow from 0,0 to '+str(Special[len(Special)-1])+',0 nohead lt 0 lw 4\n')
-
-	fout.write('plot ')
-	for i in range(NBAND):
-		fout.write("'"+dir+spinf1+"'"+' u 1:'+str(i+2)+' w l lw 2 lc '+str(color1)+',\\\n')
-	for i in range(NBAND-1):
-		fout.write("'"+dir+spinf2+"'"+' u 1:'+str(i+2)+' w l lw 2 lc '+str(color2)+',\\\n')
-	fout.write("'"+dir+spinf2+"'"+' u 1:'+str(NBAND+1)+' w l lw 2 lc '+str(color2)+'\n')
-
-	fout.close()
-
-def plot(y0,y1,color,color2,Dir='',outputfilename='output.jpeg',filename='plot_test'):
-	global ISPIN
-	if ISPIN == 1:
-		print2File(0,'plot.dat',Dir)
-		writePlot(y0,y1,color,'plot.dat',outputfilename,Dir,filename)
-		os.system('gnuplot<'+Dir+filename+'>'+outputfilename)
-		os.system('rm '+Dir+filename)
-		os.system('rm '+Dir+'plot.dat')
-	if ISPIN == 2:
-		print2File(0,'SPINUP.dat',Dir)
-		print2File(1,'SPINDOWN.dat',Dir)
-		plotSpin(y0,y1,color,color2,'SPINUP.dat','SPINDOWN.dat',outputfilename,Dir,filename)
-		os.system('gnuplot<'+Dir+filename+'>'+outputfilename)
-		os.system('rm '+Dir+filename)
-
-def dirGenerator():
-	global DIR
-	os.system('mkdir pic')
-	M = ['Co','Cr','Fe','Mn','Ni','Sc','Ti','V']
-	O = ['N','O']
-	X = ['Br','Cl','F']
-	for x in M:
-		for y in O:
-			for z in X:
-				name = x+y+z
-				if os.path.exists(name+'/band/EIGENVAL'):
-					initialize()
-					DIR = name+'/'
-					outputfilename = 'pic/'+name+'-band'
-					read_EIGENVAL()
-					plot(-23,12,8,7,DIR,outputfilename+'0.eps')
-					plot(-4,4,8,7,DIR,outputfilename+'1.eps')
-
-def run():
-	initialize()
-	read_EIGENVAL()
-	#plot(3.02527,20.03929,8,7,'','band.eps')
-	plot(-23,12,8,7,DIR,'band0.eps')
-	plot(-4,4,8,7,DIR,'band1.eps')
-	plot(0,0.75,8,7,DIR,'band2.eps')
-	#dirGenerator()
-run()
-#print(Special)
-#dirGenerator()
-#print_SPIN()
-#print_SPIN(1)
+# clean all unnecessary files
+def clean_all(name):
+	file_list = ['plot.gnu','%s.eps'%name]
+	for i in range(NUM_SUB_PLOTS):
+		file_list.append("%s.dat"%(i+1))
+	for file in file_list:
+		if path.exists(file):
+			remove(file)
