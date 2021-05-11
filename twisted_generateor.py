@@ -38,10 +38,11 @@ class atomic_structure:
 	tag = 'Direct'
 	atom = []
 	nions = 0
-
+	thickness = 0
 	def __init__(self,file='POSCAR'):
 		with open(file,'r') as fin:
 			POSCAR_lines = fin.readlines()
+		#print(POSCAR_lines)
 		self.title = POSCAR_lines[0][:-2]
 		self.frac = float(POSCAR_lines[1].split()[0])
 		self.basis = []
@@ -66,8 +67,11 @@ class atomic_structure:
 			for j in range(self.natoms[i]):
 				self.nions += 1
 				atom_ij = atom_unit(element=self.elements[i])
-				atom_ij.read_poslines(POSCAR_lines[8+self.selective_dynamics+i*self.natoms[i-1]+j])
+				atom_ij.read_poslines(POSCAR_lines[8+self.selective_dynamics+self.nions-1])
 				self.atom.append(atom_ij)
+		self.standardize()
+
+
 
 	def reset(self):
 		self.frac = 1.0
@@ -137,6 +141,22 @@ class atomic_structure:
 				self.atom[i].set_position_c(self.atom[i].position[-1]*old_c/new_c)
 			self.basis[-1][-1]=new_c
 
+	def standardize(self):
+		c_min = 1
+		c_max = -1
+		for atom in self.atom:
+			if atom.position[-1]>c_max:
+				c_max=deepcopy(atom.position[2])
+			if atom.position[-1]<c_min:
+				c_min=deepcopy(atom.position[2])
+		if c_max-c_min>0.5:
+			self.thickness = 1-(c_max-c_min)
+		else:
+			self.thickness = c_max-c_min
+		center = c_min+self.thickness/2
+		for atom in self.atom:
+			atom.set_position_c((atom.position[2]+0.5-center)%1)
+
 
 	def transform(self,P,p=[0,0,0]):
 		newPOSCAR=deepcopy(self)
@@ -153,31 +173,37 @@ class atomic_structure:
 			atom_new = []
 			inv_p = linalg.pinv(array(P)) #the atom position vector should dot this
 			#################search atoms in the new basis#####################
-			stack = [[0,0,0]]
+			stack = [[0,0,0],[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,1],[0,0,-1]]
 			search_map = []
 			while len(stack)!=0:
-				#print(stack[0])
-				for atom in self.atom:
-					newatom=deepcopy(atom)
-					position=((array(atom.position)+array(stack[0])).dot(array(inv_p).T)).tolist()
-					flag,trans=self.atom_in_cell(position)
+				n_new  = 0
+				for i in range(self.nions):
+					newatom = deepcopy(self.atom[i])
+					position = ((array(self.atom[i].position)+array(stack[0])).dot(array(inv_p).T)+array(p)).tolist()
+					flag,trans = self.atom_in_cell(position)
+
 					if flag:
 						newatom.set_position(position)
 						newPOSCAR.add_atom(newatom)
-						#print(position,stack[0],newPOSCAR.nions)
-					#print((array(atom.position).T.dot(array(inv_p))).T)
+						n_new += 1
 
-				for nextcell in [[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,1],[0,0,-1]]:
-					cell = array(nextcell)+array(stack[0])
-					if cell.tolist() not in search_map and cell.tolist() not in stack: 
-						index=0
-						for corners in [[0,0,0],[1,0,0],[0,1,0],[1,1,0],[0,0,1],[1,0,1],[0,1,1],[1,1,1]]:
-							cornerpos = array(corners)+array(cell)
-							flag,trans=self.atom_in_cell(((cornerpos).dot(array(inv_p).T)).tolist())
-							if flag:
-								index+=1
-						if index>0:
+				if n_new>0:
+					for nextcell in [[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,1],[0,0,-1]]:
+						cell = array(nextcell)+array(stack[0])
+						if cell.tolist() not in search_map and cell.tolist() not in stack:
 							stack.append(cell.tolist())
+
+				#for nextcell in [[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,1],[0,0,-1]]:
+				#	cell = array(nextcell)+array(stack[0])
+				#	if cell.tolist() not in search_map and cell.tolist() not in stack: 
+				#		index=0
+				#		for corners in [[0,0,0],[1,0,0],[0,1,0],[1,1,0],[0,0,1],[1,0,1],[0,1,1],[1,1,1]]:
+				#			cornerpos = array(corners)+array(cell)
+				#			flag,trans=self.atom_in_cell(((cornerpos).dot(array(inv_p).T)).tolist())
+				#			if flag:
+				#				index+=1
+				#		if index>0:
+				#			stack.append(cell.tolist())
 				search_map.append(stack.pop(0))
 		return newPOSCAR
 
@@ -285,7 +311,7 @@ def find_rectangle(MPcut,tolerance,lattice,writeflag=False):
 							#print(b_0,b_1,lattice.basis[0],lattice.basis[1],strain+1)
 							print("[%d,%d]\t[%d,%d,%d,%d]\t%.3f\t%d\t%.4f%%"%(mp,nq,m,n,p,q,angle,(m*q-n*p)*2*lattice.nions,100*strain))
 							if writeflag:
-								generate_rectangle(m,n,p,q,lattice,'%.3f_%d.vasp'%(angle,(m*q-n*p)*2*lattice.nions))
+								generate_rectangle(m,n,p,q,lattice,filename='%.3f_%d.vasp'%(angle,(m*q-n*p)*2*lattice.nions))
 							#print('\t',m,n,p,q,angle,(m*q-n*p)*2*lattice.nions)
 
 		mp -= 1
@@ -298,29 +324,32 @@ def generate_square(m,n,lattice):
 
 def build_bilayer(P1,P2,d,lattice):
 	latticeA=lattice.transform(P1)
-	latticeB=lattice.transform(P2)
+	latticeB=lattice.transform(P2).transform([[1,0,0],[0,1,0],[0,0,1]],[0,0.5,0.])
 	latticeA.print_POSCAR('POSCARa.vasp')
 	latticeB.print_POSCAR('POSCARb.vasp')
 	print("The rotation angle is %.3f deg"%(calc_Angle(latticeA.basis[0],latticeB.basis[0])))
-	bilayer=combine_POSCAR(latticeA,latticeB,[0,0,d])
-	bilayer.add_vaccum(6)
+	bilayer=combine_POSCAR(latticeA,latticeB,[0,0,d/latticeA.cell_length()[-1]+latticeA.thickness])
+	bilayer.add_vaccum(d+latticeA.thickness*latticeA.cell_length()[-1])
 	return bilayer
 
-def generate_rectangle(m,n,p,q,lattice,filename='CONTCAR'):
+def generate_rectangle(m,n,p,q,lattice,d=3,filename='CONTCAR'):
+	#############################################################
+	# d: distance between two layers with d in unit of angstrom #
+	#############################################################
 	latt = deepcopy(lattice)
 	correction=calculate_strain(m*p,n*q,latt.cell_length()[0],latt.cell_length()[1])
 	latt.strain(correction)
 	P1=[[m,p,0],[n,q,0],[0,0,1]]
 	P2=[[m,-p,0],[-n,q,0],[0,0,1]]
-	d=0.3
 	bilayer=build_bilayer(P1,P2,d,latt)
 	bilayer.print_POSCAR(filename)
 	#print((m*q-n*p)*4*2)
 
 
-SnS=atomic_structure('POSCAR.SnS_d.vasp')
-#SnSe.transform([[7,3,0],[-2,10,0],[0,0,1]]).print_POSCAR()
-#generate_rectangle(100,3,SnSe) 
-#generate_square(15,1,SnSe)
-find_rectangle(50,0.1,SnS,writeflag=True)
-#generate_rectangle(10,1,-1,9,SnS,'CONTCAR')
+SnS_d=atomic_structure('POSCAR.SnS_d.vasp')
+#print(SnS_d.natoms)
+#find_rectangle(50,1,SnS_d,writeflag=False)
+#for i in range(11):
+#	distance = 2 + i/10
+#	generate_rectangle(10,1,-1,9,SnS_d,distance,filename='SnS_d_12.03_%.1f.vasp'%distance)
+generate_rectangle(11,1,-1,10,SnS_d,filename='SnS_d_cont.vasp')
