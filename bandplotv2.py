@@ -116,9 +116,10 @@ class band_structure:
 		self.NIONS = int(getoutput("grep NIONS %s"%self.file).split()[-1])
 		self.ISPIN = int(getoutput("grep ISPIN %s"%self.file).split()[2])
 		self.E_fermi = float((getoutput("grep E-fermi %s"%self.file)).split()[2])
-		self.METAGGA = str(getoutput("grep 'METAGGA=' %s"%self.file).split()[1])
+		#self.METAGGA = str(getoutput("grep 'METAGGA=' %s"%self.file).split()[1])
 		self.LHFCALC = str(getoutput("grep 'LHFCALC =' %s"%self.file).split()[2])=='T'
 		self.flag_read = 'EIGENVAL'
+		self.autoKLABEL = False
 
 	def set_E_fermi(self,E):
 		self.E_fermi = E
@@ -133,70 +134,59 @@ class band_structure:
 		new_proj = projected_band(atom1=atom1,atom2=atom2,orbital=orbital,color=color,outputfilename=outputfilename)
 		new_proj.calculate(self.ISPIN,self.NKPTS,self.NBANDS,self.Projection)
 		self.projection_list.append(new_proj)
+	
+	def generate_newobj(self,obj,indexlist):
+		# reorder certain object list according to given index list
+		obj_new = []
+		for i in indexlist:
+			obj_new.append(obj[i])
+		return obj_new
 
-	def load(self,OUTCAR='band/OUTCAR',PROCAR='band/PROCAR',EIGENVAL='band/EIGENVAL'): # add band in OUTCAR, along k-axis
+	def generate_k_path(self,Kpoints):
+		# generate Kpath and Special for given Kpoints list
+		route = 0.
+		Kpath = [0.]
+		Special = []
+		tmp = 0.
+		NSPECIAL = 0
+		for i in range(1,len(Kpoints)):
+			dr = distance(Kpoints[i],Kpoints[i-1])
+			if abs(dr-tmp)>1e-6:
+				Special.append([Kpath[i-1],i-1,NSPECIAL])
+				if abs(dr)>1e-6:
+					NSPECIAL+=1
+			route += dr
+			Kpath.append(route)
+			tmp = dr
+		Special.append([Kpath[-1],len(Kpoints)-1,NSPECIAL])
+		return Kpath,Special
+	
+		
+
+	def load(self,OUTCAR='band/OUTCAR',PROCAR='band/PROCAR',EIGENVAL='band/EIGENVAL',iband=[]): # add band in OUTCAR, along k-axis
 		NKPTS_new = int(getoutput("grep NKPTS %s"%OUTCAR).split()[3])
 		NBANDS_new = int(getoutput("grep 'number of bands    NBANDS=' %s"%OUTCAR).split()[-1])
 		NK_skip = 0
+		if iband == []:
+			iband = [0,NBANDS_new-1]
 		if self.METAGGA != 'F' or self.LHFCALC:
 			NK_skip = 1
 			while float((getoutput("grep 2pi/SCALE %s -A %d|tail -n %d|tail -1"%(OUTCAR,NK_skip,NK_skip)).split()[-1])) > 0:
 				NK_skip += 1
 			NK_skip = NK_skip-1
+			
 		# read k-path and find high-symmetry points
 		kpoint_list = getoutput("grep '2pi/SCALE' %s -A %d|tail -n %d"%(OUTCAR,NKPTS_new,NKPTS_new-NK_skip)).split()
-		if len(self.Special)==0:
-			route = 0
-			self.Special.append([route,0,self.NSPECIAL])
-			#self.NSPECIAL += 1
-		else:
-			route = self.Kpath[-1]
-		flag_special = False
 		for i in range(NKPTS_new-NK_skip):
 			self.Kpoints.append([float(kpoint_list[4*i]),float(kpoint_list[4*i+1]),float(kpoint_list[4*i+2])])
-			if len(self.Kpoints) > 1:
-				dr = distance(self.Kpoints[-1],self.Kpoints[-2])
-				if len(self.Kpath)>1 and not is_parallel(array(self.Kpoints[-1])-array(self.Kpoints[-2]),array(self.Kpoints[-2])-array(self.Kpoints[-3])):
-				#if len(self.Kpath) > 1 and dr > 3*(self.Kpath[-1]-self.Kpath[-2]) and (self.Kpath[-1]-self.Kpath[-2]) != 0:
-					dr = 0
-				if flag_special:# and dr !=0 and dr-(self.Kpath[-2]-self.Kpath[-3])>1e-8:
-					flag_special = False
-					#if route != self.Special[-1][0]:
-					if distance(self.Kpoints[-2],self.Kpoints[-3])>1e-8:
-						self.NSPECIAL +=1
-						self.Special.append([route,i+self.NKPTS-1,self.NSPECIAL])
-					elif not is_parallel(array(self.Kpoints[-1])-array(self.Kpoints[-2]),array(self.Kpoints[-3])-array(self.Kpoints[-4])):
-						self.Special.append([route,i+self.NKPTS-1,self.NSPECIAL])
-					else:
-						self.NSPECIAL -=1
-						del(self.Special[-1])
-				if dr == 0:
-					flag_special = True
-				route += dr
-			self.Kpath.append(route)
-		if route != self.Special[-1][0] :
-			self.NSPECIAL += 1
-		self.Special.append([route,i+self.NKPTS,self.NSPECIAL])
-
-		if self.flag_read=='OUTCAR':# read eigenvalues from OUTCAR
-			for spin in range(self.ISPIN):
-				for k in range(1+NK_skip,NKPTS_new+1):
-					klines = getoutput("grep 'k-point%6d' %s -A %d|egrep -v 'k-point|band'|awk '{print $2}'"%(k,OUTCAR,NBANDS_new+1)).split()
-					band_k = [[],[]] # eigenvalues for kth k-point
-					for band in range(NBANDS_new):
-						bandpoint=band_point(energy=float(klines[band+NBANDS_new*spin])-self.E_fermi)
-						band_k[spin].append(bandpoint)
-						if bandpoint.energy>0 and bandpoint.energy<self.CBM[1]:
-							self.CBM = [self.Kpath[k+self.NKPTS-1],bandpoint.energy,k+self.NKPTS-1,band]
-						if bandpoint.energy<0 and bandpoint.energy>self.VBM[1]:
-							self.VBM = [self.Kpath[k+self.NKPTS-1],bandpoint.energy,k+self.NKPTS-1,band]
-					self.Energy[spin].append(band_k[spin])
-
-		elif self.flag_read=='EIGENVAL':# read eigenvalues from EIGENVAL
+		self.Kpath, self.Special = self.generate_k_path(self.Kpoints)
+		##########################################################################################
+		# read eigenvalues from EIGENVAL
+		if self.flag_read=='EIGENVAL':
 			for spin in range(self.ISPIN):
 				temp_k = []
-				for band in range(NBANDS_new):
-					bandlines = getoutput("grep '%5d      ' %s|awk '{print $%d}'"%(band+1,EIGENVAL,spin+2)).split()
+				for band in range(iband[0],iband[-1]+1):
+					bandlines = getoutput("grep '%5d      ' %s|awk '{print $%d}'"%(band+1,EIGENVAL,spin+2)).split()[-NKPTS_new:]
 					for k in range(1+NK_skip,NKPTS_new+1):
 						bandpoint=band_point(energy=float(bandlines[k-NK_skip-1])-self.E_fermi)
 						if k-NK_skip>len(temp_k):
@@ -252,69 +242,33 @@ class band_structure:
 		self.NKPTS += NKPTS_new-NK_skip
 
 	def rearrange(self,newlist):
-		Special_new = []
-		Kpoints_new = []
-		Energy_new = [[],[]]
-		Projection_new = [[],[]]
-		Kpath_new = []
-		VBM_new = [0,-100,0,0]
-		CBM_new = [0,100,0,0]
-		route_new = 0
-		k_new = 0
-		#print(self.Special)
-		for i in range(len(newlist)):
-			j = abs(newlist[i])
-			if newlist[i]>0:
-				Special_new.append(deepcopy(self.Special)[(j-1)*2])
-				Special_new.append(deepcopy(self.Special)[(j-1)*2+1])
-				Kpoints_new += self.Kpoints[Special_new[-2][1]:Special_new[-1][1]+1]
-				for spin in range(self.ISPIN):
-					Energy_new[spin] += self.Energy[spin][Special_new[-2][1]:Special_new[-1][1]+1]
-					Projection_new[spin] += self.Projection[spin][Special_new[-2][1]:Special_new[-1][1]+1]
-			else:	
-				Special_new.append(deepcopy(self.Special)[(j-1)*2+1])
-				Special_new.append(deepcopy(self.Special)[(j-1)*2])
-				Kpoints_new += list(reversed(self.Kpoints[Special_new[-1][1]:Special_new[-2][1]+1]))
-				for spin in range(self.ISPIN):
-					Energy_new[spin] += list(reversed(self.Energy[spin][Special_new[-1][1]:Special_new[-2][1]+1]))
-					Projection_new[spin] += list(reversed(self.Projection[spin][Special_new[-1][1]:Special_new[-2][1]+1]))
-			#print(abs(self.Special[(j-1)*2][0]-self.Special[(j-1)*2+1][0]))
-			Special_new[-2][0] = route_new
-			Special_new[-2][1] = k_new
-			route_new += abs(self.Special[(j-1)*2][0]-self.Special[(j-1)*2+1][0])
-			k_new += abs(self.Special[(j-1)*2][1]-self.Special[(j-1)*2+1][1])
-			Special_new[-1][0] = route_new
-			Special_new[-1][1] = k_new
-			Kpath_new += linspace(Special_new[-2][0],Special_new[-1][0],abs(Special_new[-2][1]-Special_new[-1][1])+1).tolist()
-			k_new += 1
-
-		self.Special = Special_new
-		self.Kpoints = Kpoints_new
-		self.Energy = Energy_new
-		self.Projection = Projection_new
-		self.Kpath = Kpath_new
-		#print(Special_new)
+		# Reorder the bandstructure according to given k-points index list
+		self.Kpoints = self.generate_newobj(self.Kpoints,newlist)
+		self.Kpath,self.Special = self.generate_k_path(self.Kpoints)
+		for i in range(self.ISPIN):
+			self.Energy[i] = self.generate_newobj(self.Energy[i],newlist)
+		if self.plot_projection:
+			for i in range(self.ISPIN):
+				self.Projection[i] = self.generate_newobj(self.Projection[i],newlist)	
 	
 	def exchange(self,ibanda,ibandb,ik,ispin=0):
 		self.Energy[ispin][ik][ibanda],self.Energy[ispin][ik][ibandb]=self.Energy[ispin][ik][ibandb],self.Energy[ispin][ik][ibanda]
 		if self.plot_projection:
 			self.Projection[ispin][ik][ibanda],self.Projection[ispin][ik][ibandb]=self.Projection[ispin][ik][ibandb],self.Projection[ispin][ik][ibanda]
-			
-		
-
-
 
 	def read_bandplot(self,OUTCAR='OUTCAR',PROCAR='PROCAR',EIGENVAL='EIGENVAL'):
 		self.load(OUTCAR=OUTCAR,PROCAR=PROCAR,EIGENVAL=EIGENVAL)
 
-def write_plot(bands=[],head='',dir=''):
+def write_plot(bands=[],head='',dir='',iband=[]):
 	filenum = 0
+	if iband==[]:
+		iband=[0,bands.NBANDS-1]
 	for bandstruct in bands:
 		#print(bandstruct.NBANDS,bandstruct.NKPTS,bandstruct.ISPIN)
 		for spin in range(bandstruct.ISPIN):
 			filenum += 1
 			with open('%s%d.dat'%(head,filenum),'w') as fout:
-				for band in range(bandstruct.NBANDS):
+				for band in range(iband[-1]-iband[0]+1):
 					for k in range(bandstruct.NKPTS):
 						print('%f\t%f'%(bandstruct.Kpath[k],bandstruct.Energy[spin][k][band].energy),file=fout,end=' ')
 						if bandstruct.plot_projection:
@@ -338,12 +292,12 @@ def write_gnuplot(y0,y1,band_list=[],filename='',outputfilename=''):
 	line_width = 4
 	xtics_size = 22
 	ytics_size = 22
-	ylabel_size = 24
+	ylabel_size = 32
 	with open('%s.gnu'%filename,'w') as fout:
 		print('set term post eps dl 0.4 color enhanced "%s"'%font,file=fout)
 		print('set output "%s.eps"'%outputfilename,file=fout)
 		print('unset key',file=fout)
-		print('set size ratio 0.8',file=fout)
+		print('set size ratio 1.2',file=fout)
 		print('set border lw %d'%border_width,file=fout)
 		print('set ylabel "Energy (eV)" font "%s,%d"'%(font,ylabel_size),file=fout)
 		print('emin=%f'%y0,file=fout)
@@ -352,23 +306,19 @@ def write_gnuplot(y0,y1,band_list=[],filename='',outputfilename=''):
 		print('set yrange [emin:emax]',file=fout)
 		print('set ytics font "%s,%d"'%(font,ytics_size),file=fout)
 		print('set xtics () font "%s,%d"'%(font,xtics_size),file=fout)
-		print(band_list[0].Special)
 		for bandstruct in band_list:
 			if bandstruct.plot_gap:
 				print('set object 1 circle center %f,%f size 0.0004 lc 1 fs transparent solid 0.8 noborder fc "red"'%(bandstruct.VBM[0],bandstruct.VBM[1]),file=fout)
 				print('set object 2 circle center %f,%f size 0.0004 lc 1 fs transparent solid 0.8 noborder fc "blue"'%(bandstruct.CBM[0],bandstruct.CBM[1]),file=fout)		
 		
 		for i in range(len(band_list[0].Special)):
-			if i==0 or i==len(band_list[0].Special)-1:
-				print('set xtics add ("%s" %f)'%(band_list[0].Xtics[band_list[0].Special[i][-1]],band_list[0].Special[i][0]),file=fout)
-			elif band_list[0].Special[i][0] == band_list[0].Special[i-1][0]:
-				if band_list[0].Xtics[band_list[0].Special[i][2]] == band_list[0].Xtics[band_list[0].Special[i-1][2]]:
+			if band_list[0].Xtics[band_list[0].Special[i][-1]] != "":
+				if i==0 or i==len(band_list[0].Special)-1:
+					print('set xtics add ("%s" %f)'%(band_list[0].Xtics[band_list[0].Special[i][-1]],band_list[0].Special[i][0]),file=fout)
+				elif band_list[0].Special[i][0] != band_list[0].Special[i-1][0]:
 					print('set xtics add ("%s" %f)'%(band_list[0].Xtics[band_list[0].Special[i][-1]],band_list[0].Special[i][0]),file=fout)
 					print('set arrow from %f,emin to %f,emax nohead front lt 0 lw %d'%(band_list[0].Special[i][0],band_list[0].Special[i][0],arrow_width),file=fout)
-				else:
-					print('set xtics add ("%s|%s" %f)'%(band_list[0].Xtics[band_list[0].Special[i-1][-1]],band_list[0].Xtics[band_list[0].Special[i][-1]],band_list[0].Special[i][0]),file=fout)	
-					print('set arrow from %f,emin to %f,emax nohead front lt -1 lw %d'%(band_list[0].Special[i][0],band_list[0].Special[i][0],arrow_width),file=fout)
-
+		
 		filenum = 0
 		print('plot ',end=' ',file=fout)
 		for bandstruct in band_list:
@@ -407,105 +357,22 @@ def fat_band_plot(y0,y1,atom1,atom2,orbit,filename,outputfilename):
 	#clean_all(outputfilename)
 
 
-def plot(y0,y1,E_fermi=-0.76917987,xtics=['{/Symbol G}','X','S','Y','{/Symbol G}','S'],dir='./',filename='',outputfilename='band'):
-	band = band_structure(file=dir+'OUTCAR.0',color=['blue','red'],xtics=xtics)
+def plot(y0,y1,E_fermi=-0.76917987,xtics=['{/Symbol G}','M','K','{/Symbol G}',"K\'"],dir='./',filename='',outputfilename='band'):
+	band = band_structure(file=dir+'OUTCAR.0',color=['red','red'],xtics=xtics)
+	iband=[8000,8075]
 	band.set_E_fermi(E_fermi)
-	#-0.77080878 6.03
-	#-0.70343092 13.44
-	#-0.76917987 12
-	#-0.79923184 167
-	#-0.76723717 soc
-	for i in range(5):
+
+	for i in range(9):
 		print('Reading file set%d...'%i)
-		band.read_bandplot(OUTCAR=dir+'OUTCAR.%d'%i,EIGENVAL=dir+'EIGENVAL.%d'%i)
-	#for i in range(5):
-	#	band.read_bandplot(dir+'OUTCAR.'+str(i))
-	band.rearrange([-4,-3,-5,1,2])
+		band.load(OUTCAR=dir+'OUTCAR.%d'%i,EIGENVAL=dir+'EIGENVAL.%d'%i,iband=iband)
+
+	new_klist = [x for x in range(18)]+[x for x in range(26,17,-1)]
+	band.rearrange(new_klist)
 	band_list = [band]
-	write_plot(band_list,filename)
-	#print(len(band.Special))
+	write_plot(band_list,filename,iband=iband)
 	write_gnuplot(y0=y0,y1=y1,band_list=band_list,filename=filename,outputfilename=outputfilename)
 	system('gnuplot<%s.gnu'%filename)
 	eps_to_png(outputfilename)
-	#clean_all(outputfilename)
+	clean_all(outputfilename)
 
-def band_print(nband,dir):
-	band = band_structure(file=dir+'OUTCAR.0')
-	band.set_E_fermi(-0.76723717)
-	for i in range(5):
-		band.read_bandplot(OUTCAR=dir+'OUTCAR.%d'%i,EIGENVAL=dir+'EIGENVAL.%d'%i)
-	band.rearrange([-4,-3,-5,1,2])
-	#print(band.NKPTS)
-	#for i in range(0,2+1):
-	#	band.exchange(1817,1818,i)
-	#for i in range(57,68+1):
-	#	band.exchange(1817,1818,i)
-	for spin in range(band.ISPIN):
-		for k in range(band.NKPTS):
-			print(band.Kpoints[k][0],band.Kpoints[k][1],end='\t')
-			for iband in nband:
-				print(band.Energy[spin][k][iband-1].energy,end='\t')
-			print()
-	#for spin in range(band.ISPIN):
-	#	for iband in nband:
-	#			with open('band%d.dat'%iband,'w') as fout: 
-	#				for k in range(band.NKPTS):
-	#					print('%f\t%f'%(band.Kpath[k],band.Energy[spin][k][iband-1].energy),file=fout)
-		
-
-
-#plot(y0=-0.335,y1=-0.26,xtics=['{/Symbol G}','Y'],dir='SnS.12.03.SOC3/',outputfilename='SnS.12.03.SOC3.1')
-#plot(y0=-0.29,y1=-0.26,xtics=['{/Symbol G}','Y'],dir='SnS.12.03.SOC3/',outputfilename='SnS.12.03.SOC3.15')
-#plot(y0=-0.4,y1=-0.37,xtics=['{/Symbol G}','Y'],dir='SnS.12.03.SOC3/',outputfilename='SnS.12.03.SOC3.2')
-
-#plot(y0=-0.278,y1=-0.274,E_fermi=-.76723717,xtics=['X','S'],dir='SnS.12.03.XS/',outputfilename='SnS.12.03.XS.1')
-#plot(y0=-0.278,y1=-0.274,E_fermi=-.76723717,xtics=['X','S'],dir='SnS.12.03.GS/',filename='SnS.6.03.new',outputfilename='SnS.12.03.GS.1')
-#plot(y0=-0.28,y1=-0.27,xtics=['X','S'],dir='SnS.12.03.XS/',outputfilename='SnS.12.03.XS.125')
-#plot(y0=-0.29,y1=-0.26,xtics=['X','S'],dir='SnS.12.03.XS/',outputfilename='SnS.12.03.XS.15')
-#plot(y0=-0.335,y1=-0.325,xtics=['X','S'],dir='SnS.12.03.XS/',outputfilename='SnS.12.03.XS.125')
-#plot(y0=-0.35,y1=-0.34,xtics=['X','S'],dir='SnS.12.03.XS/',outputfilename='SnS.12.03.XS.2')
-
-#plot(y0=-0.335,y1=-0.26,xtics=['{/Symbol G}','Y'],dir='SnS.12.03.SOC2/',outputfilename='SnS.12.03.SOC2.1')
-#plot(y0=-0.45,y1=-0.335,xtics=['{/Symbol G}','Y'],dir='SnS.12.03.SOC2/',outputfilename='SnS.12.03.SOC2.2')
-#plot(y0=-0.29,y1=-0.26,xtics=['{/Symbol G}','Y'],dir='SnS.12.03.SOC2/',outputfilename='SnS.12.03.SOC3.1')
-#plot(y0=-0.45,y1=-0.335,xtics=['{/Symbol G}','Y'],dir='SnS.12.03.SOC2/',outputfilename='SnS.12.03.SOC3.2')
-#plot(y0=-0.325,y1=-0.315,xtics=['{/Symbol G}','Y'],dir='SnS.12.03.SOC2/',outputfilename='SnS.12.03.SOC2.25')
-#plot(y0=-0.75,y1=1.5,xtics=['{/Symbol G}','Y'],dir='SnS.12.03.SOC2/',outputfilename='SnS.12.03.SOC2.3')
-
-#plot(y0=-0.32,y1=-0.275,xtics=['{/Symbol G}','X'],dir='SnS.12.03.SOC1/',outputfilename='SnS.12.03.SOC1.1')
-#plot(y0=-0.45,y1=-0.43,xtics=['{/Symbol G}','X'],dir='SnS.12.03.SOC1/',outputfilename='SnS.12.03.SOC1.2')
-#plot(y0=-0.325,y1=-0.335,xtics=['{/Symbol G}','X'],dir='SnS.12.03.SOC1/',outputfilename='SnS.12.03.SOC1.25')
-#plot(y0=-0.75,y1=1.5,xtics=['{/Symbol G}','X'],dir='SnS.12.03.SOC1/',outputfilename='SnS.12.03.SOC1.3')
-
-
-#plot(y0=-0.29,y1=-0.22,dir='SnS.167.965/',outputfilename='SnS_167.1')
-#plot(y0=-0.405,y1=-0.3,dir='SnS.167.965/',outputfilename='SnS_167.2')
-#plot(y0=-0.75,y1=1.5,dir='SnS.167.965/',outputfilename='SnS_167.3')
-
-#plot(y0=-0.325,y1=-0.315,,dir='SnS.12.03/',outputfilename='SnS.12.03.1')
-#plot(y0=-0.45,y1=-0.33,dir='SnS.12.03/',outputfilename='SnS.12.03.2')
-#plot(y0=-0.75,y1=1.5,dir='SnS.12.03/',outputfilename='SnS.12.03.3')
-
-#plot(y0=-0.335,y1=-0.265,E_fermi=-.76723717,dir='SnS.12.03.SOC/',outputfilename='SnS.12.03.SOC.1')
-#plot(y0=-0.445,y1=-0.345,E_fermi=-.76723717,dir='SnS.12.03.SOC/',outputfilename='SnS.12.03.SOC.2')
-
-plot(y0=-0.35,y1=-0.25,E_fermi=-0.70343092,dir='SnS.13.443/',filename='SnS.13.443',outputfilename='SnS.13.443.1')
-#plot(y0=-0.5,y1=-0.,E_fermi=-0.74773081,dir='SnS.13.443_new/',filename='SnS.13.443_new',outputfilename='SnS.13.443_new.1')
-#plot(y0=-0.5,y1=-0.,E_fermi=-0.77080878,dir='SnS.6.03/',outputfilename='SnS.6.03.1')
-#plot(y0=-0.265,y1=-0.255,E_fermi=-0.77080878,dir='SnS.6.03/',outputfilename='SnS.6.03.2')
-
-#plot(y0=-0.5,y1=0.5,E_fermi=-0.77080878,dir='SnS.6.03.new/',filename='SnS.6.03.new',outputfilename='SnS.6.03.new.1')
-
-#band_print(nband=[1815,1816,1817,1818,1819,1820],dir='SnS.12.03/')
-#band_print(nband=[3629,3630,3631,3632,3633,3634,3635,3636,3637,3638,3639,3640],dir='SnS.12.03.SOC/')
-
-
-#for i in range(4,10):
-#	fat_band_plot(-3,3,25,25,[i],'LS','LS_Ni1_%s'%ORBITAL[i])
-#	fat_band_plot(-3,3,26,26,[i],'LS','LS_Ni2_%s'%ORBITAL[i])
-#	fat_band_plot(-3,3,25,25,[i],'SCO','SCO_Ni1_%s'%ORBITAL[i])
-#	fat_band_plot(-3,3,26,26,[i],'SCO','SCO_Ni2_%s'%ORBITAL[i])
-#	fat_band_plot(-3,3,25,25,[i],'HS','HS_Ni1_%s'%ORBITAL[i])
-#	fat_band_plot(-3,3,26,26,[i],'HS','HS_Ni2_%s'%ORBITAL[i])
-
- 
+plot(y0=-0.5,y1=0.5,E_fermi=0.44883190,dir='band/',filename='band',outputfilename='bandall',xtics=['{/Symbol G}',"M","K",'{/Symbol G}'])
