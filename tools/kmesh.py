@@ -63,5 +63,3 @@ def generate_line(nklines,k_i,k_f,nk,title):
 			
 
 generate_mesh(11,11,1,[-0.5,0,0],[0.5,0.5,0],11,'KPOINTS.mesh')
-#generate_line(6,[0.45,0.5,0],[0.5,0.5,0],20,'KPOINTS.XS')
-#generate_line(6,[0,0,0],[0.05,0.05,0],20,'KPOINTS.GS')
