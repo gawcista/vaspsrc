@@ -206,13 +206,6 @@ class band_structure:
             for i in range(self.ISPIN):
                 self.Projection[i] = self.generate_newobj(self.Projection[i],newlist)    
     
-    
-    def exchange(self,ibanda,ibandb,ik,ispin=0):
-        self.Energy[ispin][ik][ibanda],self.Energy[ispin][ik][ibandb]=self.Energy[ispin][ik][ibandb],self.Energy[ispin][ik][ibanda]
-        if self.plot_projection:
-            self.Projection[ispin][ik][ibanda],self.Projection[ispin][ik][ibandb]=self.Projection[ispin][ik][ibandb],self.Projection[ispin][ik][ibanda]
-            
-
     def read_bandplot(self,OUTCAR='OUTCAR',PROCAR='PROCAR',EIGENVAL='EIGENVAL'):
         self.load(OUTCAR=OUTCAR,PROCAR=PROCAR,EIGENVAL=EIGENVAL)
 
