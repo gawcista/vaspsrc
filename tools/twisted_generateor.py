@@ -71,8 +71,6 @@ class atomic_structure:
 				self.atom.append(atom_ij)
 		self.standardize()
 
-
-
 	def reset(self):
 		self.frac = 1.0
 		self.basis = []
@@ -87,12 +85,13 @@ class atomic_structure:
 		self.basis=basis
 
 	def atom_in_cell(self,position):
+		tol=1e-4
 		flag = True
 		trans=[0,0,0]
 		for i in range(3):
-			if abs(position[i])<1e-10:
+			if abs(position[i])<tol:
 				position[i]=0.
-			if abs(position[i]-1)<1e-10:
+			if abs(position[i]-1)<tol:
 				position[i]=1.0	
 			if not(position[i]>=0 and position[i]<1.):
 				flag = False
@@ -140,23 +139,39 @@ class atomic_structure:
 			for i in range(self.nions):
 				self.atom[i].set_position_c(self.atom[i].position[-1]*old_c/new_c)
 			self.basis[-1][-1]=new_c
+		self.standardize()
 
 	def standardize(self):
 		c_min = 1
 		c_max = -1
-		for atom in self.atom:
+		for atom in self.atom:   
 			if atom.position[-1]>c_max:
 				c_max=deepcopy(atom.position[2])
 			if atom.position[-1]<c_min:
 				c_min=deepcopy(atom.position[2])
 		if c_max-c_min>0.5:
-			self.thickness = 1-(c_max-c_min)
+			self.thickness = 1-(c_max-c_min) 
 		else:
 			self.thickness = c_max-c_min
 		center = c_min+self.thickness/2
+		#print(c_min,c_max,center,self.thickness)
 		for atom in self.atom:
 			atom.set_position_c((atom.position[2]+0.5-center)%1)
 
+	def checkcenter(self):
+		c_min = 1
+		c_max = -1
+		for atom in self.atom:   
+			if atom.position[-1]>c_max:
+				c_max=deepcopy(atom.position[2])
+			if atom.position[-1]<c_min:
+				c_min=deepcopy(atom.position[2])
+		if c_max-c_min>0.5:
+			thickness = 1-(c_max-c_min) 
+		else:
+			thickness = c_max-c_min
+		center = c_min+thickness/2
+		print(c_min,c_max,center,thickness)
 
 	def transform(self,P,p=[0,0,0]):
 		newPOSCAR=deepcopy(self)
@@ -173,7 +188,7 @@ class atomic_structure:
 			atom_new = []
 			inv_p = linalg.pinv(array(P)) #the atom position vector should dot this
 			#################search atoms in the new basis#####################
-			stack = [[0,0,0],[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,1],[0,0,-1]]
+			stack = [[0,0,0],[1,0,0],[0,1,0],[0,-1,0],[-1,0,0],[0,0,1],[0,0,-1]]
 			search_map = []
 			while len(stack)!=0:
 				n_new  = 0
@@ -193,18 +208,8 @@ class atomic_structure:
 						if cell.tolist() not in search_map and cell.tolist() not in stack:
 							stack.append(cell.tolist())
 
-				#for nextcell in [[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,1],[0,0,-1]]:
-				#	cell = array(nextcell)+array(stack[0])
-				#	if cell.tolist() not in search_map and cell.tolist() not in stack: 
-				#		index=0
-				#		for corners in [[0,0,0],[1,0,0],[0,1,0],[1,1,0],[0,0,1],[1,0,1],[0,1,1],[1,1,1]]:
-				#			cornerpos = array(corners)+array(cell)
-				#			flag,trans=self.atom_in_cell(((cornerpos).dot(array(inv_p).T)).tolist())
-				#			if flag:
-				#				index+=1
-				#		if index>0:
-				#			stack.append(cell.tolist())
 				search_map.append(stack.pop(0))
+		newPOSCAR.standardize()
 		return newPOSCAR
 
 
@@ -234,6 +239,21 @@ class atomic_structure:
 def calc_Angle(a,b): #Calculate the angle between vectors <a,b>
 	return degrees(arccos(array(a).dot(array(b))/(linalg.norm(a)*linalg.norm(b))))
 
+def calc_Mismatch(lattA,lattB,printflag=True):
+	#consider strain was applied on lattB
+	cellA = array(lattA.cell_length())
+	cellB = array(lattB.cell_length())
+	mismatch = (cellA-cellB)/cellB
+	if printflag:
+		if mismatch[0] - mismatch[1]<1e-8:
+			print("%.4f%% biaxial strain should be applied!"%(100*mismatch[0]))
+		else:
+			print("%.4f%% strain should be applied on a!"%(100*mismatch[0]))
+			print("%.4f%% strain should be applied on b!"%(100*mismatch[1]))
+		if mismatch[2]!=0:
+			print("%.4f%% mismatch was found on c!"%(100*mismatch[2]))
+	return mismatch
+
 def choost(a,b):
 	if a>b:
 		return(b)
@@ -260,28 +280,29 @@ def calculate_strain(mp,nq,a,b,printflag=True):
 			return 'b',b1/b-1
 
 
+def equals_vec(a,b,tol=1e-8):
+	flag=True
+	for i in range(len(a)):
+		if abs(a[i]-b[i])>tol:
+			flag=False
+			break
+	return flag
 
-def combine_POSCAR(POSCARa,POSCARb,traslation=[0,0,0]):
+
+def combine_POSCAR(POSCARa,POSCARb,translation=[0,0,0]):
 	newPOSCAR=deepcopy(POSCARa)
 	#print(POSCARa.cell_angle(),POSCARb.cell_angle(),POSCARa.cell_length(),POSCARb.cell_length())
-	if POSCARa.cell_angle()==POSCARb.cell_angle() and POSCARa.cell_length()==POSCARb.cell_length():
+	if equals_vec(POSCARa.cell_angle(),POSCARb.cell_angle()) and equals_vec(POSCARa.cell_length(),POSCARb.cell_length()):
 		for atom in POSCARb.atom:
 			newatom=deepcopy(atom)
-			position=array(newatom.position)+array(traslation)
+			position=array(newatom.position)+array(translation)
 			newatom.set_position(position.tolist())
 			newPOSCAR.add_atom(newatom)
 	else:
 		print('WARNING: cell angles or sized does not match!! The CONTCAR may be incorrect!!' )
+	newPOSCAR.standardize()
 	return newPOSCAR
 
-def generate_hexagonal(n,m,lattice):
-	for i in range(1,n+1):
-		for j in range(1,m+1):
-			t = gcd(i,j)
-			if t==1:
-				a_prime = (array(lattice.basis[0])*i + array(lattice.basis[1])*j).tolist()
-				angle_a = calc_Angle(a_prime,lattice.basis[0])
-				angle_b	= calc_Angle(a_prime,lattice.basis[1])
 
 def find_rectangle(MPcut,tolerance,lattice,writeflag=False):
 	a = lattice.cell_length()[0]
@@ -316,23 +337,94 @@ def find_rectangle(MPcut,tolerance,lattice,writeflag=False):
 
 		mp -= 1
 
+def find_hexagonal(Mcut,lattice,writeflag=False):
+	a = lattice.cell_length()[0]
+	for m in range(1,Mcut+1):
+		for n in range(1,m):
+			if gcd(m,n) == 1:
+				v1 = (array(lattice.basis[0])*m + array(lattice.basis[1])*n).tolist()
+				v2 = (array(lattice.basis[0])*(m-n) - array(lattice.basis[1])*n).tolist()
+				angle = calc_Angle(v1,v2)
+				print("%d\t%d\t%.3f\t%d"%(m,n,angle,(m**2+n**2-m*n)*lattice.nions))
+				if writeflag:
+					generate_hexagonal(m,n,lattice,filename='%.3f_%d.vasp'%(angle,(m**2+n**2-m*n)*3*lattice.nions))
+
+def find_hexagonal_210(Mcut,lattice,writeflag=False):
+	a = lattice.cell_length()[0]
+	for m in range(1,Mcut+1):
+		for n in range(-(m-1),2*m):
+			if gcd(m,n) == 1 and m != 2*n:
+				v1 = (array(lattice.basis[0])*m + array(lattice.basis[1])*n).tolist()
+				v2 = (array(lattice.basis[0])*m - array(lattice.basis[1])*(n-m)).tolist()
+				angle = calc_Angle(v1,v2)
+				print("%d\t%d\t%.3f\t%d"%(m,n,angle,(m**2+n**2-m*n)*lattice.nions))
+				if writeflag:
+					generate_hexagonal(m,n,lattice,filename='%.3f_%d.vasp'%(angle,(m**2+n**2-m*n)*3*lattice.nions))
+	
+
 def generate_square(m,n,lattice):
 	P1=[[n,m,0],[-m,n,0],[0,0,1]]
 	P2=[[n,-m,0],[m,n,0],[0,0,1]]
 	d=0.3
 	build_bilayer(P1,P2,d,lattice)
 
-def build_bilayer(P1,P2,d,lattice):
+def build_bilayer(P1,P2,d,lattice,translation=[0.,0.,0.]):
 	latticeA=lattice.transform(P1)
-	latticeB=lattice.transform(P2).transform([[1,0,0],[0,1,0],[0,0,1]],[0,0.5,0.])
-	latticeA.print_POSCAR('POSCARa.vasp')
-	latticeB.print_POSCAR('POSCARb.vasp')
+	latticeB=lattice.transform(P2).transform([[1,0,0],[0,1,0],[0,0,1]],translation)
 	print("The rotation angle is %.3f deg"%(calc_Angle(latticeA.basis[0],latticeB.basis[0])))
-	bilayer=combine_POSCAR(latticeA,latticeB,[0,0,d/latticeA.cell_length()[-1]+latticeA.thickness])
+	bilayer=combine_POSCAR(latticeA,latticeB,[0,0,d/latticeA.cell_length()[-1]+(latticeA.thickness+latticeB.thickness)/2])
 	bilayer.add_vaccum(d+latticeA.thickness*latticeA.cell_length()[-1])
 	return bilayer
 
-def generate_rectangle(m,n,p,q,lattice,d=3,filename='CONTCAR'):
+def build_trilayer_ABA_heter(P1,P2,d,lattA,lattB,translation=[0.,0.,0.]):
+	latticeA=lattA.transform(P1)
+	latticeB=lattB.transform(P2).transform([[1,0,0],[0,1,0],[0,0,1]],translation)
+	latticeB.add_vaccum(latticeA.cell_length()[-1]-latticeB.cell_length()[-1])
+	mismatch=calc_Mismatch(latticeA,latticeB)
+	latticeB=latticeB.transform([[1+mismatch[0],0,0],[0,1+mismatch[1],0],[0,0,1]],translation)
+	bilayer=combine_POSCAR(latticeA,latticeB,[0,0,(d/latticeA.cell_length()[-1]+(latticeA.thickness+latticeB.thickness)/2)])
+	bilayer.add_vaccum(d+latticeB.thickness*latticeB.cell_length()[-1])
+	latticeB.add_vaccum(d+latticeB.thickness*latticeB.cell_length()[-1])
+	trilayer = combine_POSCAR(latticeB,bilayer,[0,0,(d/bilayer.cell_length()[-1]+(bilayer.thickness+latticeB.thickness)/2)])
+	trilayer.add_vaccum(d+latticeB.thickness*latticeB.cell_length()[-1])
+	return trilayer
+
+def build_bilayer_heter(P1,P2,d,lattA,lattB,translation=[0.,0.,0.],frac=1.0):
+	latticeA=lattA.transform(P1)
+	latticeB=lattB.transform(P2).transform([[1,0,0],[0,1,0],[0,0,1]],translation)
+	latticeB.add_vaccum(latticeA.cell_length()[-1]-latticeB.cell_length()[-1])
+	mismatch=calc_Mismatch(latticeA,latticeB)
+	latticeB=latticeB.transform([[1+mismatch[0],0,0],[0,1+mismatch[1],0],[0,0,1]],translation)
+	bilayer=combine_POSCAR(latticeA,latticeB,[0,0,frac*(d/latticeA.cell_length()[-1]+(latticeA.thickness+latticeB.thickness)/2)])
+	bilayer.add_vaccum(d+latticeB.thickness*latticeB.cell_length()[-1])
+	print("The rotation angle is %.3f deg"%(calc_Angle(latticeA.basis[0],latticeB.basis[0])))
+	return bilayer
+
+def build_trilayer_ABA(P1,P2,d,lattice):
+	latticeA=lattice.transform(P1)
+	latticeB=lattice.transform(P2)#.transform([[1,0,0],[0,1,0],[0,0,1]],[0,0.5,0.])
+	print("The rotation angle is %.3f deg"%(calc_Angle(latticeA.basis[0],latticeB.basis[0])))
+	bilayer=combine_POSCAR(latticeA,latticeB,[0,0,d/latticeA.cell_length()[-1]+latticeA.thickness])
+	bilayer.add_vaccum(d+latticeA.thickness*latticeA.cell_length()[-1])
+	latticeA.add_vaccum(d+latticeA.thickness*latticeA.cell_length()[-1])
+	trilayer=combine_POSCAR(bilayer,latticeA,[0,0,d/bilayer.cell_length()[-1]+(bilayer.thickness+latticeA.thickness)/2])
+	trilayer.add_vaccum(d+latticeA.thickness*latticeA.cell_length()[-1])
+	return trilayer
+
+def build_trilayer_AAB(P1,P2,d,lattice):
+	latticeA=lattice.transform(P1)
+	latticeB=lattice.transform(P2)#.transform([[1,0,0],[0,1,0],[0,0,1]],[1/3,1/3,0.])
+	print("The rotation angle is %.3f deg"%(calc_Angle(latticeA.basis[0],latticeB.basis[0])))
+	bilayer=combine_POSCAR(latticeA,latticeA,[0,0,d/latticeA.cell_length()[-1]+latticeA.thickness])
+	bilayer.add_vaccum(d+latticeA.thickness*latticeA.cell_length()[-1])
+	latticeB.add_vaccum(d+latticeB.thickness*latticeB.cell_length()[-1])
+	trilayer=combine_POSCAR(bilayer,latticeB,[0,0,d/bilayer.cell_length()[-1]+(bilayer.thickness+latticeB.thickness)/2])
+	trilayer.add_vaccum(d+latticeB.thickness*latticeB.cell_length()[-1])
+	return trilayer
+
+
+
+def generate_rectangle(m,n,p,q,lattice,d=4,filename='CONTCAR'):
 	#############################################################
 	# d: distance between two layers with d in unit of angstrom #
 	#############################################################
@@ -346,10 +438,108 @@ def generate_rectangle(m,n,p,q,lattice,d=3,filename='CONTCAR'):
 	#print((m*q-n*p)*4*2)
 
 
-SnS_d=atomic_structure('POSCAR.SnS_d.vasp')
-#print(SnS_d.natoms)
-#find_rectangle(50,1,SnS_d,writeflag=False)
-#for i in range(11):
-#	distance = 2 + i/10
-#	generate_rectangle(10,1,-1,9,SnS_d,distance,filename='SnS_d_12.03_%.1f.vasp'%distance)
-generate_rectangle(11,1,-1,10,SnS_d,filename='SnS_d_cont.vasp')
+def generate_hexagonal_ABA(m,n,lattice,d=4,filename='CONTCAR'):
+	#############################################################
+	# d: distance between two layers with d in unit of angstrom #
+	#############################################################
+	P1=[[m,-n,0],[n,m-n,0],[0,0,1]]
+	P2=[[m-n,n,0],[-n,m,0],[0,0,1]]
+	trilayer=build_trilayer_ABA(P1,P2,d,lattice)
+	trilayer.print_POSCAR(filename)
+	#print((m*q-n*p)*4*2)
+
+def generate_hexagonal_ABA_heter(m,n,latticeA,latticeB,d=4,filename='CONTCAR'):
+	#############################################################
+	# d: distance between two layers with d in unit of angstrom #
+	#############################################################
+	P1=[[1,0,0],[0,1,0],[0,0,1]]
+	P2=[[m,-n,0],[n,m-n,0],[0,0,1]]
+	P3=[[m,n-m,0],[m-n,n,0],[0,0,1]]
+	for atom in latticeB.atom:
+		atom.set_dynamics(["F","F","F"])
+	bilayer=build_bilayer_heter(P1,P2,d,latticeA,latticeB)
+	trilayer=build_bilayer_heter(P1,P3,d,bilayer,latticeB,frac=-1.0)
+	trilayer.selective_dynamics=1
+	trilayer.print_POSCAR(filename)
+	print(trilayer.nions)
+	#print((m*q-n*p)*4*2)
+
+def generate_hexagonal_ABA_210(m,n,lattice,d=4,filename='CONTCAR'):
+	#############################################################
+	# d: distance between two layers with d in unit of angstrom #
+	#############################################################
+	P1=[[m,-n,0],[n,m-n,0],[0,0,1]]
+	P2=[[m,n-m,0],[m-n,n,0],[0,0,1]]
+	trilayer=build_trilayer_ABA(P1,P2,d,lattice)
+	trilayer.print_POSCAR(filename)
+
+def generate_hexagonal_AAB(m,n,lattice,d=4,filename='CONTCAR'):
+	#############################################################
+	# d: distance between two layers with d in unit of angstrom #
+	#############################################################
+	P1=[[m,-n,0],[n,m-n,0],[0,0,1]]
+	P2=[[m-n,n,0],[-n,m,0],[0,0,1]]
+	trilayer=build_trilayer_AAB(P1,P2,d,lattice)
+	trilayer.print_POSCAR(filename)
+	#print((m*q-n*p)*4*2)
+
+def generate_hexagonal_AAB_210(m,n,lattice,d=4,filename='CONTCAR'):
+	#############################################################
+	# d: distance between two layers with d in unit of angstrom #
+	#############################################################
+	P1=[[m,-n,0],[n,m-n,0],[0,0,1]]
+	P2=[[m,n-m,0],[m-n,n,0],[0,0,1]]
+	trilayer=build_trilayer_AAB(P1,P2,d,lattice)
+	trilayer.print_POSCAR(filename)
+
+def generate_hexagonal(m,n,lattice,d=4,translation=[0.,0.,0.],filename='CONTCAR'):
+	#############################################################
+	# d: distance between two layers with d in unit of angstrom #
+	#############################################################
+	P1=[[m,-n,0],[n,m-n,0],[0,0,1]]
+	P2=[[m-n,n,0],[-n,m,0],[0,0,1]]
+	bilayer=build_bilayer(P1,P2,d,lattice,translation)
+	bilayer.print_POSCAR(filename)
+
+def generate_hexagonal_210(m,n,lattice,d=4,filename='CONTCAR'):
+	#############################################################
+	# d: distance between two layers with d in unit of angstrom #
+	#############################################################
+	P1=[[m,-n,0],[n,m-n,0],[0,0,1]]
+	P2=[[m,n-m,0],[m-n,n,0],[0,0,1]]
+	bilayer=build_bilayer(P1,P2,d,lattice)
+	bilayer.print_POSCAR(filename)
+
+def find_mn(Mcut,structA,structB):
+	a = structA.cell_length()[0]
+	min_trans = [0.001,0,0]
+	for m in range(1,Mcut+1):
+		for n in range(1,m):
+			v = array(structB.basis[0])*m + array(structB.basis[1])*n
+			b = linalg.norm(v)
+			if abs(b-a)/a < min_trans[0]:
+				min_trans[0] = abs(b-a)/a
+				min_trans[1],min_trans[2] = m,n
+				print(*min_trans)
+	if min_trans[1:] != [0,0]:
+		print(*min_trans)
+	else:
+		print("Not found!")
+
+structure=atomic_structure('monolayer.vasp')
+#generate_hexagonal(13,6,structure,filename='bilayer_13_6.vasp')
+#generate_hexagonal(11,1,structure,filename='bilayer_11_1.vasp')
+generate_hexagonal_210(7,3,structure,d=4,filename='bilayer_210_7_3.vasp')
+#generate_hexagonal_210(15,7,structure,d=4,filename='bilayer_210_15_7.vasp')
+#generate_hexagonal_210(17,8,structure,d=4,filename='bilayer_210_17_8.vasp')
+#generate_hexagonal_210(21,10,structure,d=4,filename='bilayer_210_21_10.vasp')
+#generate_hexagonal_ABA_210(13,6,structure,d=4,filename='trilayer_ABA_210_13_6.vasp')
+
+
+
+#tWSe2 = atomic_structure('1.00.vasp')
+#hBN = atomic_structure('hBN.vasp')
+#find_mn(20,tWSe2,hBN)
+#m=17
+#n=10
+#generate_hexagonal_ABA_heter(17,7,tWSe2,hBN,d=3,filename="test.vasp")

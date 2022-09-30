@@ -1,3 +1,4 @@
+from email.policy import default
 from subprocess import getoutput
 from numpy import array,zeros
 
@@ -209,25 +210,40 @@ class band_structure:
     def read_bandplot(self,OUTCAR='OUTCAR',PROCAR='PROCAR',EIGENVAL='EIGENVAL'):
         self.load(OUTCAR=OUTCAR,PROCAR=PROCAR,EIGENVAL=EIGENVAL)
 
-def plot_matplotlib(band_list,erange=[-1.0,1.0],outputfile="band.png",title="",plot_legend=False):
+def plot_matplotlib(band_list,erange=[-1.0,1.0],outputfile="band.png",title="",plot_legend=False,**kargs):
+    def set_params(kargs):
+        default_arg = {}
+        default_arg['border_width'] = 3
+        default_arg['fontfamily'] = ['Arial']
+        default_arg['fontsize'] = 18
+        default_arg['ylabel_fontsize'] = 24
+        default_arg['figure_figsize'] = (4,4)
+        default_arg['figure_autolayout'] = True
+        default_arg['band_linewidth'] = 1.5
+        default_arg['band_markersize'] = 5
+        default_arg['projection_weight'] = 50
+        default_arg['projection_alpha'] = 0.3
+        for key,value in kargs.items():
+            default_arg[key] = value
+        return default_arg
     import matplotlib.pyplot as plt
     kpath = band_list[0].Kpath
-    border_width = 3
-    plt.rcParams['font.family']=['Arial']
-    plt.rcParams['font.size'] = 18
+    param = set_params(kargs)
+    plt.rcParams['font.family'] = param['fontfamily']
+    plt.rcParams['font.size'] = param['fontsize']
     plt.rcParams['xtick.major.pad'] = 8
     plt.rcParams['ytick.major.pad'] = 8
-    plt.rcParams['figure.autolayout'] = True
-    plt.rcParams['figure.figsize'] = (4,4)
+    plt.rcParams['figure.autolayout'] = param['figure_autolayout']
+    plt.rcParams['figure.figsize'] = param['figure_figsize']
     fig, ax = plt.subplots(1, 1)
-    ax.spines['bottom'].set_linewidth(border_width)
-    ax.spines['left'].set_linewidth(border_width)
-    ax.spines['top'].set_linewidth(border_width)
-    ax.spines['right'].set_linewidth(border_width)
-    ax.tick_params(direction='in', width=border_width)
+    ax.spines['bottom'].set_linewidth(param['border_width'])
+    ax.spines['left'].set_linewidth(param['border_width'])
+    ax.spines['top'].set_linewidth(param['border_width'])
+    ax.spines['right'].set_linewidth(param['border_width'])
+    ax.tick_params(direction='in', width=param['border_width'])
     ax.set_xlim(kpath[0],kpath[-1])
     ax.set_ylim(erange[0],erange[1])
-    ax.set_ylabel('Energy (eV)',fontsize=24)
+    ax.set_ylabel('Energy (eV)',fontsize=param['ylabel_fontsize'])
     xticks_position=[]
     xticks_label=[]
     for special in band_list[0].Special:
@@ -245,20 +261,25 @@ def plot_matplotlib(band_list,erange=[-1.0,1.0],outputfile="band.png",title="",p
             for iband in range(len(energy)):
                 band = [e.energy for e in energy[iband]]
                 if bandstruct.plotmode == "line":
-                    line,=ax.plot(kpath,band,color=bandstruct.color[spin],linewidth=1.5)
+                    line,=ax.plot(kpath,band,color=bandstruct.color[spin],linewidth=param['band_linewidth'])
                 elif bandstruct.plotmode == "scatter":
-                    line,=ax.plot(kpath,band,marker='o',ms=5,mec=bandstruct.color[spin],color='none')
+                    line,=ax.plot(kpath,band,marker='o',ms=param['band_markersize'],mec=bandstruct.color[spin],color='none')
 
                 if bandstruct.plot_projection and len(bandstruct.projection_list)>0:
                     for projection in bandstruct.projection_list:
-                        proj = 50*projection.proj[spin].T[iband]
-                        ax.scatter(kpath,band,proj,alpha=0.3,marker='o',color=projection.color)
+                        proj = param['projection_weight']*projection.proj[spin].T[iband]
+                        ax.scatter(kpath,band,proj,alpha=param['projection_alpha'],marker='o',color=projection.color)
         if bandstruct.label != "":
             line.set_label(bandstruct.label)
 
     if title!= "":
         ax.set_title(title,pad=15)
+
+    if "lines_sup" in param:
+        for line in param['lines_sup']:
+            ax.plot(line["x"],line["y"],color=line["color"],linewidth=line["linewidth"])
+
     if plot_legend:
         ax.legend()
     ax.hlines(0.,kpath[0],kpath[-1],linewidth=1.0,edgecolor="gray",linestyles="--")
-    plt.savefig(outputfile,transparent=False,dpi=600)
+    plt.savefig(outputfile,transparent=True,dpi=600)
