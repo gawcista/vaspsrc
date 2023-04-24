@@ -91,13 +91,15 @@ class band_structure:
         self.NIONS = int(getoutput("grep NIONS %s"%self.file).split()[-1])
         self.ISPIN = int(getoutput("grep ISPIN %s|tail -1"%self.file).split()[2])
         self.E_fermi = float((getoutput("grep E-fermi %s"%self.file)).split()[2])
-        #self.METAGGA = str(getoutput("grep 'METAGGA=' %s"%self.file).split()[1])
+        if int(getoutput("grep 'METAGGA =' %s|wc -l"%self.file)) > 0:
+            self.METAGGA = str(getoutput("grep 'METAGGA =' %s|tail -1"%self.file).split()[2])
         self.LHFCALC = str(getoutput("grep 'LHFCALC =' %s|tail -1"%self.file).split()[2])=='T'
         self.LSORBIT = str(getoutput("grep 'LSORBIT =' %s|tail -1"%self.file).split()[2])=='T'
         self.flag_read = 'EIGENVAL'
         #self.autoKLABEL = False
         self.plotmode = "line"
         self.label = ""
+        self.bandcut = 100.
 
     def set_E_fermi(self,E):
         self.E_fermi = E
@@ -127,7 +129,7 @@ class band_structure:
             obj_new.append(obj[i])
         return array(obj_new)
 
-    def generate_k_path(self,Kpoints):
+    def generate_k_path(self,Kpoints,tol=1e-6):
         # generate Kpath and Special for given Kpoints list
         route = 0.
         Kpath = [0.]
@@ -136,18 +138,22 @@ class band_structure:
         NSPECIAL = 0
         for i in range(1,len(Kpoints)):
             dr = distance(Kpoints[i],Kpoints[i-1])
-            if abs(dr-tmp)>1e-6:
+            if abs(dr-tmp) > tol:
                 Special.append([Kpath[i-1],i-1,NSPECIAL])
-                if abs(dr)>1e-6:
-                    NSPECIAL+=1
+                if abs(dr) > self.bandcut*abs(tmp) and abs(tmp) > tol:
+                    NSPECIAL += 1
+                    dr = 0
+                if abs(dr) > tol:
+                    NSPECIAL += 1
             route += dr
-            Kpath.append(route)
             tmp = dr
+            Kpath.append(route)
         Special.append([Kpath[-1],len(Kpoints)-1,NSPECIAL])
         return Kpath,Special
           
 
-    def load(self,OUTCAR='band/OUTCAR',PROCAR='band/PROCAR',EIGENVAL='band/EIGENVAL',iband=[]): # add band in OUTCAR, along k-axis
+    def load(self,OUTCAR='band/OUTCAR',PROCAR='band/PROCAR',EIGENVAL='band/EIGENVAL',iband=[],bandcut=10): # add band in OUTCAR, along k-axis
+        self.bandcut = bandcut
         NKPTS_new = int(getoutput("grep NKPTS %s"%OUTCAR).split()[3])
         NBANDS_new = int(getoutput("grep 'number of bands    NBANDS=' %s"%OUTCAR).split()[-1])
         NK_skip = 0
@@ -158,10 +164,10 @@ class band_structure:
             while float((getoutput("grep 2pi/SCALE %s -A %d|tail -n %d|tail -1"%(OUTCAR,NK_skip,NK_skip)).split()[-1])) > 0:
                 NK_skip += 1
             NK_skip = NK_skip-1
-            
+        NKPTS_new = NKPTS_new - NK_skip 
         # read k-path and find high-symmetry points
-        kpoint_list = getoutput("grep '2pi/SCALE' %s -A %d|tail -n %d"%(OUTCAR,NKPTS_new,NKPTS_new-NK_skip)).split()
-        for i in range(NKPTS_new-NK_skip):
+        kpoint_list = getoutput("grep '2pi/SCALE' %s -A %d|tail -n %d"%(OUTCAR,NKPTS_new+NK_skip,NKPTS_new)).split()
+        for i in range(NKPTS_new):
             self.Kpoints.append([float(kpoint_list[4*i]),float(kpoint_list[4*i+1]),float(kpoint_list[4*i+2])])
         self.Kpath, self.Special = self.generate_k_path(self.Kpoints)
         ##########################################################################################
@@ -171,16 +177,16 @@ class band_structure:
                 temp_k = []
                 for band in range(iband[0],iband[-1]+1):
                     bandlines = getoutput("grep '%5d      ' %s|awk '{print $%d}'"%(band+1,EIGENVAL,spin+2)).split()[-NKPTS_new:]
-                    for k in range(1+NK_skip,NKPTS_new+1):
-                        bandpoint=band_point(energy=float(bandlines[k-NK_skip-1])-self.E_fermi)
-                        if k-NK_skip>len(temp_k):
+                    for k in range(NKPTS_new):
+                        bandpoint=band_point(energy=float(bandlines[k])-self.E_fermi)
+                        if k>=len(temp_k):
                             temp_k.append([bandpoint])
                         else:
-                            temp_k[k-NK_skip-1].append(bandpoint)
+                            temp_k[k].append(bandpoint)
                         if bandpoint.energy>0 and bandpoint.energy<self.CBM[1]:
-                            self.CBM = [self.Kpath[k+self.NKPTS-1],bandpoint.energy,k+self.NKPTS-1,band]
+                            self.CBM = [self.Kpath[k],bandpoint.energy,k,band]
                         if bandpoint.energy<0 and bandpoint.energy>self.VBM[1]:
-                            self.VBM = [self.Kpath[k+self.NKPTS-1],bandpoint.energy,k+self.NKPTS-1,band]
+                            self.VBM = [self.Kpath[k],bandpoint.energy,k,band]
                 for k_list in temp_k:
                     self.Energy[spin].append(k_list)
 
@@ -209,6 +215,28 @@ class band_structure:
     
     def read_bandplot(self,OUTCAR='OUTCAR',PROCAR='PROCAR',EIGENVAL='EIGENVAL'):
         self.load(OUTCAR=OUTCAR,PROCAR=PROCAR,EIGENVAL=EIGENVAL)
+
+def write_plot(bands=[],head='band',dir=''):
+    ###### to be reconstructed
+    filenum = 0
+    for bandstruct in bands:
+        for spin in range(bandstruct.ISPIN):
+            filenum += 1
+            with open('%s%d.dat'%(head,filenum),'w') as fout:
+                for band in range(array(bandstruct.Energy[spin]).shape[1]):
+                    for k in range(bandstruct.NKPTS):
+                        print('%f\t%f'%(bandstruct.Kpath[k],bandstruct.Energy[spin][k][band].energy),file=fout,end=' ')
+                        if bandstruct.plot_projection:
+                            for proj in bandstruct.projection_list:
+                                print('\t%f'%proj.proj[spin][k][band],end=' ',file=fout)
+                        print(file=fout)
+                        if (k>0 and k in array(bandstruct.Special).T[1] and k+1 in array(bandstruct.Special).T[1]) or k+1 == bandstruct.NKPTS:
+                            print(file=fout)
+						#if k<bandstruct.NKPTS-1 and bandstruct.Kpath[k] in bandstruct.Breakpoints and bandstruct.Kpath[k+1] in bandstruct.Breakpoints:
+                        #	print(file=fout)
+                        #print(file=fout)
+    global NUM_SUB_PLOTS
+    NUM_SUB_PLOTS = filenum
 
 def plot_matplotlib(band_list,erange=[-1.0,1.0],outputfile="band.png",title="",plot_legend=False,**kargs):
     def set_params(kargs):
@@ -246,12 +274,21 @@ def plot_matplotlib(band_list,erange=[-1.0,1.0],outputfile="band.png",title="",p
     ax.set_ylabel('Energy (eV)',fontsize=param['ylabel_fontsize'])
     xticks_position=[]
     xticks_label=[]
-    for special in band_list[0].Special:
-        xtic = band_list[0].Xtics[special[-1]]
-        if xtic !="":
-            xticks_position.append(special[0])
-            ax.vlines(special[0],erange[0],erange[1],linewidth=1.0,edgecolor="gray",linestyles="--")
-            xticks_label.append(xtic)
+    xticks_position.append(band_list[0].Special[0][0])
+    xticks_label.append(band_list[0].Xtics[band_list[0].Special[0][2]])
+    for n in range(1,len(band_list[0].Special)):
+        if band_list[0].Xtics[band_list[0].Special[n][2]] !="":
+            if band_list[0].Special[n-1][0] == band_list[0].Special[n][0] and  band_list[0].Special[n-1][2] != band_list[0].Special[n][2]:
+                xticks_position.append(band_list[0].Special[n][0])
+                ax.vlines(band_list[0].Special[n][0],erange[0],erange[1],linewidth=1.0,edgecolor="black")
+                xticks_label.append("%s|%s"%(band_list[0].Xtics[band_list[0].Special[n-1][2]],band_list[0].Xtics[band_list[0].Special[n][2]]))
+            elif band_list[0].Special[n-1][0] != band_list[0].Special[n][0]:
+                xticks_position.append(band_list[0].Special[n][0])
+                ax.vlines(band_list[0].Special[n][0],erange[0],erange[1],linewidth=1.0,edgecolor="gray",linestyles="--")
+                xticks_label.append(band_list[0].Xtics[band_list[0].Special[n][2]])
+
+
+
     ax.set_xticks(xticks_position)
     ax.set_xticklabels(xticks_label)
     for bandstruct in band_list:
@@ -261,7 +298,11 @@ def plot_matplotlib(band_list,erange=[-1.0,1.0],outputfile="band.png",title="",p
             for iband in range(len(energy)):
                 band = [e.energy for e in energy[iband]]
                 if bandstruct.plotmode == "line":
-                    line,=ax.plot(kpath,band,color=bandstruct.color[spin],linewidth=param['band_linewidth'])
+                    for n in range(1,len(band_list[0].Special)):
+                        if band_list[0].Special[n][0] != band_list[0].Special[n-1][0]:
+                            ki = band_list[0].Special[n-1][1]
+                            kf = band_list[0].Special[n][1]
+                            line,=ax.plot(kpath[ki:kf+1],band[ki:kf+1],color=bandstruct.color[spin],linewidth=param['band_linewidth'])
                 elif bandstruct.plotmode == "scatter":
                     line,=ax.plot(kpath,band,marker='o',ms=param['band_markersize'],mec=bandstruct.color[spin],color='none')
 
@@ -283,3 +324,32 @@ def plot_matplotlib(band_list,erange=[-1.0,1.0],outputfile="band.png",title="",p
         ax.legend()
     ax.hlines(0.,kpath[0],kpath[-1],linewidth=1.0,edgecolor="gray",linestyles="--")
     plt.savefig(outputfile,transparent=True,dpi=600)
+
+
+def quickplot(erange, xtics=[" "," "," "," "], E_fermi=0., dir='./', outputfilename='band', title=""):
+    band = band_structure(file=dir+'OUTCAR',color=['tab:blue','tab:red'],xtics=xtics)
+    band.set_E_fermi(E_fermi)
+    band.load(OUTCAR=dir+'OUTCAR',EIGENVAL=dir+'EIGENVAL')
+    plot_matplotlib(band_list=[band],erange=erange,outputfile=outputfilename+".png",title=title)
+
+
+def quickplot_proj(erange, ion_list, orb_list, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', title=""):
+    band = band_structure(
+        file=dir+'OUTCAR', color=['tab:grey', 'tab:grey'], xtics=xtics)
+    band.set_E_fermi(E_fermi)
+    band.set_plot_projection(True)
+    band.load(OUTCAR=dir+'OUTCAR',EIGENVAL=dir+'EIGENVAL',PROCAR=dir+"PROCAR")
+    band.set_projection(ion_list=ion_list,orb_list=orb_list,color="tab:red",label="Sb")
+    plot_matplotlib(band_list=[band],erange=erange,outputfile=outputfilename+".png",title=title,band_linewidth=0.5)
+
+
+def quickplot_proj_auto(erange, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', POSCAR='POSCAR'):
+    elements = getoutput("awk 'NR==6' %s" % (dir+POSCAR)).split()
+    ions = getoutput("awk 'NR==7' %s" % (dir+POSCAR)).split()
+    flag = 0
+    for i in range(len(elements)):
+        ion_list = range(flag,flag+int(ions[i]))
+        for orb in range(10):
+            print("Plotting projection on %s %s"%(elements[i],ORBITAL[orb]))
+            quickplot_proj(erange=erange, ion_list=ion_list, orb_list=[orb], xtics=xtics, E_fermi=E_fermi, dir=dir, outputfilename=outputfilename+'.%s.%s'%(elements[i],ORBITAL[orb]), title="%s %s"%(elements[i],ORBITAL[orb]))
+        flag += int(ions[i])
