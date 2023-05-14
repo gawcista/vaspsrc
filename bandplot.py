@@ -1,4 +1,3 @@
-from email.policy import default
 from subprocess import getoutput
 from numpy import array,zeros
 
@@ -332,6 +331,16 @@ def quickplot(erange, xtics=[" "," "," "," "], E_fermi=0., dir='./', outputfilen
     band.load(OUTCAR=dir+'OUTCAR',EIGENVAL=dir+'EIGENVAL')
     plot_matplotlib(band_list=[band],erange=erange,outputfile=outputfilename+".png",title=title)
 
+
+def quickplot_mult(erange, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', title="", nfile=1, iband=[]):
+    band = band_structure(
+        file=dir+'OUTCAR.0', color=['tab:blue', 'tab:red'], xtics=xtics)
+    band.set_E_fermi(E_fermi)
+    for i in range(nfile):
+        band.load(OUTCAR=dir+'OUTCAR.%d' %
+                  i, EIGENVAL=dir+'EIGENVAL.%d' % i, iband=iband)
+    plot_matplotlib(band_list=[band], erange=erange,
+                    outputfile=outputfilename+".png", title=title)
 
 def quickplot_proj(erange, ion_list, orb_list, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', title=""):
     band = band_structure(
