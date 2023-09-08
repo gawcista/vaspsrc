@@ -56,6 +56,7 @@ class band_structure:
     ISPIN = 0
     NIONS = 0
     NSPECIAL = 0
+    LMAXMIX = 2
     E_fermi = 0
     Xtics = []
     VBM = [-100,0,0]
@@ -94,6 +95,7 @@ class band_structure:
             self.METAGGA = str(getoutput("grep 'METAGGA =' %s|tail -1"%self.file).split()[2])
         self.LHFCALC = str(getoutput("grep 'LHFCALC =' %s|tail -1"%self.file).split()[2])=='T'
         self.LSORBIT = str(getoutput("grep 'LSORBIT =' %s|tail -1"%self.file).split()[2])=='T'
+        self.LMAXMIX = int(getoutput("grep LMAXMIX %s|tail -1"%self.file).split()[2])
         self.flag_read = 'EIGENVAL'
         #self.autoKLABEL = False
         self.plotmode = "line"
@@ -325,11 +327,11 @@ def plot_matplotlib(band_list,erange=[-1.0,1.0],outputfile="band.png",title="",p
     plt.savefig(outputfile,transparent=True,dpi=600)
 
 
-def quickplot(erange, xtics=[" "," "," "," "], E_fermi=0., dir='./', outputfilename='band', title=""):
+def quickplot(erange, xtics=[" "," "," "," "], E_fermi=0., dir='./', outputfilename='band', title="",**kargs):
     band = band_structure(file=dir+'OUTCAR',color=['tab:blue','tab:red'],xtics=xtics)
     band.set_E_fermi(E_fermi)
     band.load(OUTCAR=dir+'OUTCAR',EIGENVAL=dir+'EIGENVAL')
-    plot_matplotlib(band_list=[band],erange=erange,outputfile=outputfilename+".png",title=title)
+    plot_matplotlib(band_list=[band],erange=erange,outputfile=outputfilename+".png",title=title,**kargs)
 
 
 def quickplot_mult(erange, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', title="", nfile=1, iband=[]):
