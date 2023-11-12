@@ -1,12 +1,15 @@
 from numpy import array,loadtxt
 from subprocess import getoutput
 
-def read_band(file="wannier90_band.dat",fermi=0.):
+def read_band(file="wannier90_band.dat",fermi=0.,read_proj=False):
     dat = loadtxt(file, dtype=float).T
-    return dat[0],dat[1]-fermi
+    if read_proj:
+        return dat[0], dat[1]-fermi, dat[2]
+    else:
+        return dat[0], dat[1]-fermi
 
 def read_nkpts(file="wannier90_band.kpt"):
-    return int(getoutput("head wannier90_band.kpt -n 1"))
+    return int(getoutput("head %s -n 1"%file))
 
 def read_label(file="wannier90_band.labelinfo.dat"):
     label = loadtxt(file, dtype=str, usecols=0)
@@ -29,11 +32,16 @@ def plot(erange=[-1.0,1.0],fermi=0.,input="wannier90",outputfile="band_wan.png",
         default_arg['projection_weight'] = 50
         default_arg['projection_alpha'] = 0.3
         default_arg['background_transparent'] = True
+        default_arg['plot_projection'] = False
         for key, value in kargs.items():
             default_arg[key] = value
         return default_arg
+    param = set_params(kargs)
     # load data
-    kpath_raw, band_raw = read_band(file=input+"_band.dat", fermi=fermi)
+    if param['plot_projection']:
+        kpath_raw, band_raw, proj_raw = read_band(file=input+"_band.dat", fermi=fermi,read_proj=True)
+    else:
+        kpath_raw, band_raw = read_band(file=input+"_band.dat", fermi=fermi)
     nkpts = read_nkpts(file=input+"_band.kpt")
     special = read_label(file=input+"_band.labelinfo.dat")
     kpath = kpath_raw.reshape(-1, nkpts)
@@ -41,7 +49,6 @@ def plot(erange=[-1.0,1.0],fermi=0.,input="wannier90",outputfile="band_wan.png",
     nbands = band.shape[0]
     # set plot sytle
     import matplotlib.pyplot as plt
-    param = set_params(kargs)
     plt.rcParams['font.family'] = param['fontfamily']
     plt.rcParams['font.size'] = param['fontsize']
     plt.rcParams['xtick.major.pad'] = 8
@@ -70,6 +77,11 @@ def plot(erange=[-1.0,1.0],fermi=0.,input="wannier90",outputfile="band_wan.png",
     for i in range(nbands):
         ax.plot(kpath[i], band[i],
                 color=param['band_color'], linewidth=param['band_linewidth'])
+    if param['plot_projection']:
+        proj = (param['projection_weight']*proj_raw).reshape(-1, nkpts)
+        for i in range(nbands):
+            ax.scatter(kpath[i], band[i], proj[i],
+                   alpha=param['projection_alpha'], marker='o', color="tab:red",edgecolors="none")
     plt.savefig(
         outputfile, transparent=param['background_transparent'], dpi=600)
 

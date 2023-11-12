@@ -325,6 +325,7 @@ def plot_matplotlib(band_list,erange=[-1.0,1.0],outputfile="band.png",title="",p
         ax.legend()
     ax.hlines(0.,kpath[0],kpath[-1],linewidth=1.0,edgecolor="gray",linestyles="--")
     plt.savefig(outputfile,transparent=True,dpi=600)
+    plt.close()
 
 
 def quickplot(erange, xtics=[" "," "," "," "], E_fermi=0., dir='./', outputfilename='band', title="",**kargs):
@@ -344,23 +345,26 @@ def quickplot_mult(erange, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', out
     plot_matplotlib(band_list=[band], erange=erange,
                     outputfile=outputfilename+".png", title=title)
 
-def quickplot_proj(erange, ion_list, orb_list, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', title=""):
+def quickplot_proj(erange, ion_list, orb_list, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', title="",newlist=[]):
     band = band_structure(
         file=dir+'OUTCAR', color=['tab:grey', 'tab:grey'], xtics=xtics)
     band.set_E_fermi(E_fermi)
     band.set_plot_projection(True)
     band.load(OUTCAR=dir+'OUTCAR',EIGENVAL=dir+'EIGENVAL',PROCAR=dir+"PROCAR")
+    if newlist !=[]:
+        band.rearrange(newlist)
     band.set_projection(ion_list=ion_list,orb_list=orb_list,color="tab:red",label="Sb")
     plot_matplotlib(band_list=[band],erange=erange,outputfile=outputfilename+".png",title=title,band_linewidth=0.5)
 
 
-def quickplot_proj_auto(erange, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', POSCAR='POSCAR'):
+def quickplot_proj_auto(erange, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', POSCAR='POSCAR',newlist=[]):
     elements = getoutput("awk 'NR==6' %s" % (dir+POSCAR)).split()
     ions = getoutput("awk 'NR==7' %s" % (dir+POSCAR)).split()
     flag = 0
+    print(elements,ions)
     for i in range(len(elements)):
         ion_list = range(flag,flag+int(ions[i]))
         for orb in range(10):
             print("Plotting projection on %s %s"%(elements[i],ORBITAL[orb]))
-            quickplot_proj(erange=erange, ion_list=ion_list, orb_list=[orb], xtics=xtics, E_fermi=E_fermi, dir=dir, outputfilename=outputfilename+'.%s.%s'%(elements[i],ORBITAL[orb]), title="%s %s"%(elements[i],ORBITAL[orb]))
+            quickplot_proj(erange=erange, ion_list=ion_list, orb_list=[orb], xtics=xtics, E_fermi=E_fermi, dir=dir, outputfilename=outputfilename+'.%s.%s'%(elements[i],ORBITAL[orb]), title="%s %s"%(elements[i],ORBITAL[orb]),newlist=newlist)
         flag += int(ions[i])
