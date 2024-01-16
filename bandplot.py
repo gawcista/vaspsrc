@@ -36,7 +36,7 @@ class band_projection:
         if ion_list == []:
             ion_list = [-1]
         if orb_list == [-1]:
-            orb_list = range(Projection.shape[4])
+            orb_list = list(range(Projection.shape[5]))
         for ion in ion_list:
             for orb in orb_list:
                 proj += Projection[:,:,:,channel,ion,orb]
@@ -310,6 +310,7 @@ def plot_matplotlib(band_list,erange=[-1.0,1.0],outputfile="band.png",title="",p
                 if bandstruct.plot_projection and len(bandstruct.projection_list)>0:
                     for projection in bandstruct.projection_list:
                         proj = param['projection_weight']*projection.proj[spin].T[iband]
+                        #print(proj)
                         ax.scatter(kpath,band,proj,alpha=param['projection_alpha'],marker='o',color=projection.color)
         if bandstruct.label != "":
             line.set_label(bandstruct.label)
@@ -345,7 +346,7 @@ def quickplot_mult(erange, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', out
     plot_matplotlib(band_list=[band], erange=erange,
                     outputfile=outputfilename+".png", title=title)
 
-def quickplot_proj(erange, ion_list, orb_list, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', title="",newlist=[]):
+def quickplot_proj(erange, ion_list, orb_list, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', title="",newlist=[],label=""):
     band = band_structure(
         file=dir+'OUTCAR', color=['tab:grey', 'tab:grey'], xtics=xtics)
     band.set_E_fermi(E_fermi)
@@ -353,9 +354,19 @@ def quickplot_proj(erange, ion_list, orb_list, xtics=[" ", " ", " ", " "], E_fer
     band.load(OUTCAR=dir+'OUTCAR',EIGENVAL=dir+'EIGENVAL',PROCAR=dir+"PROCAR")
     if newlist !=[]:
         band.rearrange(newlist)
-    band.set_projection(ion_list=ion_list,orb_list=orb_list,color="tab:red",label="Sb")
+    band.set_projection(ion_list=ion_list,orb_list=orb_list,color="tab:red",label=label)
     plot_matplotlib(band_list=[band],erange=erange,outputfile=outputfilename+".png",title=title,band_linewidth=0.5)
 
+def quickplot_proj_mult(erange, ion_list, orb_list, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', title="",newlist=[],label="",nfile=1):
+    band = band_structure(file=dir+'OUTCAR.0', color=['tab:grey', 'tab:grey'], xtics=xtics)
+    band.set_E_fermi(E_fermi)
+    band.set_plot_projection(True)
+    for i in range(nfile):
+        band.load(OUTCAR=dir+'OUTCAR.%d'%i,EIGENVAL=dir+'EIGENVAL.%d'%i,PROCAR=dir+"PROCAR.%d"%i)
+    if newlist !=[]:
+        band.rearrange(newlist)
+    band.set_projection(ion_list=ion_list,orb_list=orb_list,color="tab:red",label=label)
+    plot_matplotlib(band_list=[band],erange=erange,outputfile=outputfilename+".png",title=title,band_linewidth=0.5)
 
 def quickplot_proj_auto(erange, xtics=[" ", " ", " ", " "], E_fermi=0., dir='./', outputfilename='band', POSCAR='POSCAR',newlist=[]):
     elements = getoutput("awk 'NR==6' %s" % (dir+POSCAR)).split()

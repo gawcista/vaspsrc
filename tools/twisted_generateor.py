@@ -526,13 +526,14 @@ def find_mn(Mcut,structA,structB):
 	else:
 		print("Not found!")
 
-structure=atomic_structure('monolayer.vasp')
+structure=atomic_structure('1-BL.vasp')
 #generate_hexagonal(13,6,structure,filename='bilayer_13_6.vasp')
 #generate_hexagonal(11,1,structure,filename='bilayer_11_1.vasp')
-generate_hexagonal_210(7,3,structure,d=4,filename='bilayer_210_7_3.vasp')
+#generate_hexagonal_210(7,3,structure,d=4,filename='bilayer_210_7_3.vasp')
+#generate_hexagonal_210(13,6,structure,d=4,filename='bilayer_210_13_6.vasp')
 #generate_hexagonal_210(15,7,structure,d=4,filename='bilayer_210_15_7.vasp')
 #generate_hexagonal_210(17,8,structure,d=4,filename='bilayer_210_17_8.vasp')
-#generate_hexagonal_210(21,10,structure,d=4,filename='bilayer_210_21_10.vasp')
+generate_hexagonal_210(21,10,structure,d=4,filename='bilayer_210_21_10.vasp')
 #generate_hexagonal_ABA_210(13,6,structure,d=4,filename='trilayer_ABA_210_13_6.vasp')
 
 
